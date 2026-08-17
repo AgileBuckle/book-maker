@@ -1,5 +1,6 @@
 import { useDropzone } from "react-dropzone";
 import BookDisplay from "./components/BookDisplay";
+import BatchApp from "./components/BatchApp";
 import { BookType, ScalingMode } from "./enums.ts";
 import {
   ChangeEvent,
@@ -100,6 +101,7 @@ function rgbToHex(r: number, g: number, b: number) {
 }
 
 export default function App() {
+  const [mode, setMode] = useState<"single" | "batch">("single");
   const coverInputRef = useRef<HTMLInputElement>(null);
   const spineInputRef = useRef<HTMLInputElement>(null);
   const [coverUrl, setCoverUrl] = useState(defaultCover);
@@ -280,6 +282,10 @@ export default function App() {
     setUnknownUrl(null);
   };
 
+  if (mode === "batch") {
+    return <BatchApp onExit={() => setMode("single")} />;
+  }
+
   return (
     <div
       onPaste={handlePaste}
@@ -288,6 +294,12 @@ export default function App() {
       className="flex items-center justify-center w-screen h-screen p-8 pb-20"
     >
       <section className="fixed right-4 top-4 flex flex-col items-stetch space-y-4 bg-gray-900 p-4 rounded-xl w-80">
+        <Button
+          onClick={() => setMode("batch")}
+          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800 w-full"
+        >
+          Batch Mode
+        </Button>
         <Field>
           <Label className="block mb-2 text-sm font-medium text-white">
             Book Type
