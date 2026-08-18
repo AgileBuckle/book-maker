@@ -41,3 +41,6 @@ next-env.d.ts
 
 # sensitive
 .credentials.ts
+
+# wsl thing
+public/brown_photostudio_02_1k.hdr:Zone.Identifier
