@@ -120,8 +120,13 @@ const unitFactors = new Map<Units, number>([
   [Units.Inch, 300],
 ]);
 
+function needsSpineForType(type: BookType): boolean {
+  return type === BookType.PerfectBound || type === BookType.Hardcover;
+}
+
 interface BatchRow {
   cover: NamedFile;
+  bookType: BookType;
   spineId: string | null;
   score: number | null;
 }
@@ -167,30 +172,41 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setBackColorTemp(backColor);
   }, [backColor]);
 
-  const needsSpine = [BookType.PerfectBound, BookType.Hardcover].includes(
-    bookType,
-  );
+  // `bookType` above is only the default applied to newly-added covers; each
+  // row can override its own type individually (see setRowBookType). Read
+  // the current default via a ref inside the rows effect so adding covers
+  // always picks up the latest default without re-running the effect (and
+  // re-scoring fuzzy spine matches) every time the default changes.
+  const defaultBookTypeRef = useRef<BookType>(bookType);
+  defaultBookTypeRef.current = bookType;
+
+  const defaultNeedsSpine = needsSpineForType(bookType);
 
   useEffect(() => {
-    if (!needsSpine) {
-      setRows(covers.map((cover) => ({ cover, spineId: null, score: null })));
-      return;
-    }
     const matchResult: MatchResult = matchCoversAndSpines(covers, spines);
     const matchByCover = new Map(
       matchResult.pairs.map((pair) => [pair.coverId, pair]),
     );
-    setRows(
-      covers.map((cover) => {
+    setRows((prev) => {
+      const prevBookTypeByCover = new Map(
+        prev.map((row) => [row.cover.id, row.bookType]),
+      );
+      return covers.map((cover) => {
+        const rowBookType =
+          prevBookTypeByCover.get(cover.id) ?? defaultBookTypeRef.current;
+        if (!needsSpineForType(rowBookType)) {
+          return { cover, bookType: rowBookType, spineId: null, score: null };
+        }
         const match = matchByCover.get(cover.id);
         return {
           cover,
+          bookType: rowBookType,
           spineId: match ? match.spineId : null,
           score: match ? match.score : null,
         };
-      }),
-    );
-  }, [covers, spines, needsSpine]);
+      });
+    });
+  }, [covers, spines]);
 
   const {
     getRootProps: getCoverRootProps,
@@ -238,6 +254,30 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     );
   };
 
+  const setRowBookType = (coverId: string, newBookType: BookType) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.cover.id !== coverId) return row;
+        if (!needsSpineForType(newBookType)) {
+          return { ...row, bookType: newBookType, spineId: null, score: null };
+        }
+        // Keep an existing manual/matched spine if it's still valid for the
+        // new type, otherwise try to find a fresh fuzzy match immediately
+        // rather than leaving the row unmatched until covers/spines change.
+        if (row.spineId && spines.some((s) => s.id === row.spineId)) {
+          return { ...row, bookType: newBookType };
+        }
+        const [match] = matchCoversAndSpines([row.cover], spines).pairs;
+        return {
+          ...row,
+          bookType: newBookType,
+          spineId: match ? match.spineId : null,
+          score: match ? match.score : null,
+        };
+      }),
+    );
+  };
+
   const removeCover = (coverId: string) => {
     setCovers((prev) => prev.filter((c) => c.id !== coverId));
   };
@@ -247,8 +287,11 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   };
 
   const readyRows = useMemo(
-    () => rows.filter((row) => !needsSpine || row.spineId !== null),
-    [rows, needsSpine],
+    () =>
+      rows.filter(
+        (row) => !needsSpineForType(row.bookType) || row.spineId !== null,
+      ),
+    [rows],
   );
   const skippedCount = rows.length - readyRows.length;
 
@@ -331,6 +374,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const coverExists = covers.length > 0;
   const spineExists = spines.length > 0;
 
+  // Back cover color and spiral spine width are still single, batch-wide
+  // settings (not per-row), but the controls for them should show up
+  // whenever they're relevant to any row — not just when they match the
+  // default type — since a row can be switched away from the default.
+  const anyNeedsSpine =
+    defaultNeedsSpine || rows.some((row) => needsSpineForType(row.bookType));
+  const anyHardcover =
+    bookType === BookType.Hardcover ||
+    rows.some((row) => row.bookType === BookType.Hardcover);
+  const anySpiralBound =
+    bookType === BookType.SpiralBound ||
+    rows.some((row) => row.bookType === BookType.SpiralBound);
+
   return (
     <div className="flex items-center justify-center w-screen min-h-screen p-8 pb-20">
       <section className="fixed left-4 top-4 flex flex-col items-stretch space-y-2 bg-gray-900 p-4 rounded-xl z-30">
@@ -345,7 +401,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         <div className="text-lg font-bold text-white">Batch Mode</div>
         <Field>
           <Label className="block mb-2 text-sm font-medium text-white">
-            Book Type
+            Default Book Type
           </Label>
           <div className="relative z-10">
             <Listbox
@@ -369,8 +425,12 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
               </ListboxOptions>
             </Listbox>
           </div>
+          <p className="mt-2 text-xs text-gray-400">
+            Applied to newly added covers. Each book's type can be overridden
+            individually in the list below.
+          </p>
         </Field>
-        {bookType === BookType.Hardcover ? (
+        {anyHardcover ? (
           <div className="space-y-4">
             <label
               htmlFor="batch_color_hex"
@@ -394,7 +454,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             />
           </div>
         ) : null}
-        {bookType === BookType.SpiralBound ? (
+        {anySpiralBound ? (
           <Field className="space-y-4">
             <Label className="block mb-2 text-sm font-medium text-white">
               Spine Width
@@ -498,14 +558,14 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         ) : null}
       </section>
 
-      <main className="flex flex-col gap-6 items-center w-full max-w-4xl mt-4">
+      <main className="flex flex-col gap-6 items-center w-full max-w-6xl mt-4">
         {isProcessing ? (
           <div ref={previewRef} className="flex flex-col items-center mt-12">
             <BatchBookDisplay
               coverUrl={currentRow?.cover.url ?? defaultCover}
               spineUrl={currentSpine?.url ?? defaultSpine}
               backColor={backColor}
-              bookType={bookType}
+              bookType={currentRow?.bookType ?? bookType}
               scalingMode={scalingMode}
               spineWidth={spineWidth}
               size={size}
@@ -568,7 +628,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   </ul>
                 ) : null}
               </div>
-              {needsSpine ? (
+              {anyNeedsSpine ? (
                 <div>
                   <div
                     data-success={spineExists ? true : undefined}
@@ -639,14 +699,16 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                       key={row.cover.id}
                       className="flex items-center gap-2 text-sm bg-gray-800 rounded px-2 py-1.5"
                     >
-                      <span className="flex-1 truncate">
+                      <span className="flex-1 min-w-0 truncate">
                         {row.cover.file.name}
                       </span>
-                      {needsSpine ? (
+                      {needsSpineForType(row.bookType) ? (
                         <>
-                          <span className="text-gray-500">{"↔"}</span>
+                          <span className="shrink-0 text-gray-500">
+                            {"↔"}
+                          </span>
                           <select
-                            className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
+                            className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
                             value={row.spineId ?? ""}
                             onChange={(event) =>
                               setRowSpine(
@@ -668,10 +730,10 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                             <span
                               className={
                                 row.score === null
-                                  ? "text-blue-400 text-xs w-16 text-right"
+                                  ? "shrink-0 text-blue-400 text-xs w-16 text-right"
                                   : row.score >= 0.8
-                                    ? "text-green-400 text-xs w-16 text-right"
-                                    : "text-yellow-400 text-xs w-16 text-right"
+                                    ? "shrink-0 text-green-400 text-xs w-16 text-right"
+                                    : "shrink-0 text-yellow-400 text-xs w-16 text-right"
                               }
                             >
                               {row.score === null
@@ -679,12 +741,29 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                                 : `${Math.round(row.score * 100)}%`}
                             </span>
                           ) : (
-                            <span className="text-red-400 text-xs w-16 text-right">
+                            <span className="shrink-0 text-red-400 text-xs w-16 text-right">
                               no match
                             </span>
                           )}
                         </>
                       ) : null}
+                      <select
+                        className="shrink-0 w-40 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
+                        value={row.bookType}
+                        aria-label={`Book type for ${row.cover.file.name}`}
+                        onChange={(event) =>
+                          setRowBookType(
+                            row.cover.id,
+                            Number(event.target.value) as BookType,
+                          )
+                        }
+                      >
+                        {[...bookTypeLabels.entries()].map(([type, label]) => (
+                          <option key={type} value={type}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   ))}
                 </div>

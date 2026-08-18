@@ -8,6 +8,6 @@
 
 # UX/UI Problems
 - [ ] Left align batch button on main page.
-- [ ] Gray out buttons until fully generated
+- [x] Gray out buttons until fully generated
 - [ ] Fix scaling colliding with book type selector in batch mode
 - [ ] Make design consistent between the two.
