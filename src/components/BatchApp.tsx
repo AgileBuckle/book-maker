@@ -33,6 +33,7 @@ import {
   NamedFile,
   matchCoversAndSpines,
 } from "../utils/fuzzyMatch";
+import { buildSpineTypeCsv, matchCsvToCovers } from "../utils/csvBookTypeMatch";
 import { createZipBlob } from "../utils/zip";
 import { detectBackCoverColor } from "../utils/backColor";
 import {
@@ -145,11 +146,17 @@ interface BatchResultEntry {
 export default function BatchApp({ onExit }: { onExit: () => void }) {
   const coverInputRef = useRef<HTMLInputElement>(null);
   const spineInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const [covers, setCovers] = useState<NamedFile[]>([]);
   const [spines, setSpines] = useState<NamedFile[]>([]);
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [dropError, setDropError] = useState<string | null>(null);
+  // Optional CSV (book name, spine type) that bulk-sets each row's book
+  // type. `csvFileName` is just a status label — re-running the same file
+  // (or a fresh one) re-applies matches on top of whatever's there.
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [csvWarning, setCsvWarning] = useState<string | null>(null);
 
   const [bookType, setBookType] = useState<BookType>(BookType.PerfectBound);
   const [scalingMode, setScalingMode] = useState<ScalingMode>(
@@ -337,6 +344,85 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     );
   };
 
+  // Reads an optional CSV (column A: book name, column B: spine type) and
+  // bulk-applies a book type to every row whose cover fuzzy-matches a CSV
+  // book name, reusing setRowBookType so re-matching an existing spine and
+  // clearing spineId for spine-less types stays in one place. Rows the CSV
+  // doesn't mention are left exactly as they were.
+  const applyCsvFile = async (file: File) => {
+    let text: string;
+    try {
+      text = await file.text();
+    } catch (error) {
+      console.error("Failed to read CSV file:", error);
+      setCsvWarning(
+        `Couldn't read "${file.name}" — try re-exporting it as a plain CSV file.`,
+      );
+      return;
+    }
+
+    const result = matchCsvToCovers(text, covers);
+    result.assignments.forEach(({ coverId, bookType }) => {
+      setRowBookType(coverId, bookType);
+    });
+
+    const messages: string[] = [];
+    if (result.unmatchedBookNames.length > 0) {
+      messages.push(
+        `${result.unmatchedBookNames.length} book name${
+          result.unmatchedBookNames.length === 1 ? "" : "s"
+        } in the CSV didn't match any uploaded cover: ${result.unmatchedBookNames.join(", ")}.`,
+      );
+    }
+    if (result.unrecognizedSpineTypes.length > 0) {
+      messages.push(
+        `${result.unrecognizedSpineTypes.length} row${
+          result.unrecognizedSpineTypes.length === 1 ? "" : "s"
+        } had a spine type that wasn't recognized: ${result.unrecognizedSpineTypes.join("; ")}.`,
+      );
+    }
+    if (result.assignments.length === 0 && messages.length === 0) {
+      messages.push(`"${file.name}" didn't contain any rows to apply.`);
+    }
+    setCsvWarning(messages.length > 0 ? messages.join(" ") : null);
+    setCsvFileName(file.name);
+  };
+
+  const clearCsvLabel = () => {
+    setCsvFileName(null);
+    setCsvWarning(null);
+  };
+
+  const {
+    getRootProps: getCsvRootProps,
+    getInputProps: getCsvInputProps,
+    isDragActive: isCsvDragActive,
+    fileRejections: csvFileRejections,
+  } = useDropzone({
+    onDrop: (acceptedFiles) => {
+      const file = acceptedFiles[0];
+      if (file) applyCsvFile(file);
+      if (csvInputRef.current !== null) csvInputRef.current.value = "";
+    },
+    accept: {
+      "text/csv": [".csv"],
+      "application/vnd.ms-excel": [".csv"],
+      "text/plain": [".csv"],
+    },
+    multiple: false,
+  });
+
+  useEffect(() => {
+    if (csvFileRejections.length > 0) {
+      const names = csvFileRejections.map((r) => r.file.name).join(", ");
+      setCsvWarning(
+        `Couldn't accept ${
+          csvFileRejections.length === 1 ? "this file" : "these files"
+        } for the spine type CSV — only a single .csv file is supported: ${names}.`,
+      );
+    }
+  }, [csvFileRejections]);
+
   const removeCover = (coverId: string) => {
     setCovers((prev) => prev.filter((c) => c.id !== coverId));
     releaseImageUrl(coverId);
@@ -345,6 +431,16 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const removeSpine = (spineId: string) => {
     setSpines((prev) => prev.filter((s) => s.id !== spineId));
     releaseImageUrl(spineId);
+  };
+
+  const clearAllCovers = () => {
+    covers.forEach((c) => releaseImageUrl(c.id));
+    setCovers([]);
+  };
+
+  const clearAllSpines = () => {
+    spines.forEach((s) => releaseImageUrl(s.id));
+    setSpines([]);
   };
 
   // Auto-detect the back cover color for any hardcover row that doesn't
@@ -517,6 +613,21 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         data: new Uint8Array(await entry.blob.arrayBuffer()),
       })),
     );
+    const imageCount = entries.length;
+    // Include the same "Book Name,Spine Type" CSV layout the optional
+    // upload reads, populated with what this batch actually used, so the
+    // batch can be redone later by re-uploading it instead of re-picking
+    // every book's type again.
+    const csvText = buildSpineTypeCsv(
+      readyRows.map((row) => ({
+        bookName: row.cover.file.name,
+        bookType: row.bookType,
+      })),
+    );
+    entries.push({
+      name: "book-maker-batch.csv",
+      data: new TextEncoder().encode(csvText),
+    });
     const zipBlob = await createZipBlob(entries);
     FileSaver.saveAs(zipBlob, "book-maker-batch.zip");
     if (loadedCoverIdRef.current) {
@@ -526,11 +637,11 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setIsProcessing(false);
     setCurrentUrls(null);
     setStatusText(
-      `Done — downloaded ${entries.length} image${
-        entries.length === 1 ? "" : "s"
-      } as book-maker-batch.zip.`,
+      `Done — downloaded ${imageCount} image${
+        imageCount === 1 ? "" : "s"
+      } (plus a reusable spine-type CSV) as book-maker-batch.zip.`,
     );
-  }, []);
+  }, [readyRows]);
 
   const handleSettled = useCallback(() => {
     if (!currentRow) return;
@@ -579,7 +690,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     : 0;
 
   return (
-    <div className="flex items-center justify-center w-screen min-h-screen p-8 pb-20">
+    <div className="flex items-center justify-center w-full h-screen overflow-hidden p-8 pb-20">
       <section className="fixed left-4 top-4 flex flex-col items-stretch space-y-2 bg-gray-900 p-4 rounded-xl z-30">
         <Button
           onClick={onExit}
@@ -733,9 +844,9 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         ) : null}
       </section>
 
-      <main className="flex flex-col gap-6 items-center w-full max-w-6xl mt-4">
+      <main className="flex flex-col gap-6 items-center w-full max-w-6xl h-full overflow-y-auto">
         {batchError ? (
-          <div className="w-full bg-red-950 border border-red-700 rounded-xl p-4 text-red-100">
+          <div className="w-full shrink-0 bg-red-950 border border-red-700 rounded-xl p-4 text-red-100">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="font-bold">
@@ -756,7 +867,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           </div>
         ) : null}
         {dropError ? (
-          <div className="w-full bg-yellow-950 border border-yellow-700 rounded-xl p-4 text-yellow-100">
+          <div className="w-full shrink-0 bg-yellow-950 border border-yellow-700 rounded-xl p-4 text-yellow-100">
             <div className="flex items-start justify-between gap-4">
               <p className="text-sm">{dropError}</p>
               <button
@@ -769,8 +880,25 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             </div>
           </div>
         ) : null}
+        {csvWarning ? (
+          <div className="w-full shrink-0 bg-yellow-950 border border-yellow-700 rounded-xl p-4 text-yellow-100">
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-sm">{csvWarning}</p>
+              <button
+                onClick={() => setCsvWarning(null)}
+                className="text-yellow-300 hover:text-white shrink-0"
+                aria-label="Dismiss warning"
+              >
+                <XMarkIcon className="size-5" />
+              </button>
+            </div>
+          </div>
+        ) : null}
         {isProcessing ? (
-          <div ref={previewRef} className="flex flex-col items-center mt-12">
+          <div
+            ref={previewRef}
+            className="flex flex-col items-center shrink-0 mt-12"
+          >
             {currentUrls ? (
               <BatchBookDisplay
                 coverUrl={currentUrls.cover}
@@ -797,77 +925,85 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="w-full mt-12 space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
-              <div>
-                <div
-                  data-success={coverExists ? true : undefined}
-                  className="text-gray-500 data-[success]:text-green-400"
-                >
-                  <label
-                    {...getCoverRootProps({
-                      className:
-                        "flex flex-col items-center justify-center transition-colors border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-800 bg-gray-900 hover:bg-gray-100 border-gray-600 hover:border-gray-500 w-full h-28",
-                    })}
-                  >
-                    <div className="flex flex-col items-center justify-center py-4 px-6">
-                      <div className="text-lg font-bold flex flex-row items-center gap-1">
-                        Covers ({covers.length}){" "}
-                        {coverExists ? <CheckIcon className="size-6" /> : null}
-                      </div>
-                      {isCoverDragActive ? (
-                        <p className="mb-2 text-sm">Drop Covers Here</p>
-                      ) : (
-                        <p className="mb-2 text-sm">
-                          <span className="font-semibold">Click to upload</span>{" "}
-                          or drag and drop multiple files
-                        </p>
-                      )}
-                    </div>
-                    <input {...getCoverInputProps()} ref={coverInputRef} />
-                  </label>
-                </div>
-                {covers.length > 0 ? (
-                  <ul className="mt-2 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
-                    {covers.map((c) => (
-                      <li
-                        key={c.id}
-                        className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
-                      >
-                        <span className="truncate">{c.file.name}</span>
-                        <button
-                          onClick={() => removeCover(c.id)}
-                          className="text-gray-400 hover:text-red-400 ml-2"
-                          aria-label={`Remove ${c.file.name}`}
-                        >
-                          <TrashIcon className="size-4" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-              {anyNeedsSpine ? (
+          <div className="w-full shrink-0 mt-12 space-y-6">
+            <div className="space-y-3">
+              {coverExists ? (
                 <div>
                   <div
-                    data-success={spineExists ? true : undefined}
+                    data-success={csvFileName ? true : undefined}
                     className="text-gray-500 data-[success]:text-green-400"
                   >
                     <label
-                      {...getSpineRootProps({
+                      {...getCsvRootProps({
                         className:
                           "flex flex-col items-center justify-center transition-colors border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-800 bg-gray-900 hover:bg-gray-100 border-gray-600 hover:border-gray-500 w-full h-28",
                       })}
                     >
                       <div className="flex flex-col items-center justify-center py-4 px-6">
                         <div className="text-lg font-bold flex flex-row items-center gap-1">
-                          Spines ({spines.length}){" "}
-                          {spineExists ? (
+                          Spine Type CSV (optional){" "}
+                          {csvFileName ? (
                             <CheckIcon className="size-6" />
                           ) : null}
                         </div>
-                        {isSpineDragActive ? (
-                          <p className="mb-2 text-sm">Drop Spines Here</p>
+                        {isCsvDragActive ? (
+                          <p className="mb-2 text-sm">Drop CSV Here</p>
+                        ) : (
+                          <p className="mb-2 text-sm">
+                            <span className="font-semibold">
+                              Click to upload
+                            </span>{" "}
+                            or drag and drop a CSV file
+                          </p>
+                        )}
+                      </div>
+                      <input {...getCsvInputProps()} ref={csvInputRef} />
+                    </label>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-400">
+                    Column A: book name, column B: spine type (Perfect bound,
+                    Hardcover, Saddlestitch, or Spiral bound). Book names are
+                    matched to your uploaded covers with the same fuzzy matching
+                    used for cover/spine pairing, so exact filenames aren't
+                    required.
+                  </p>
+                  {csvFileName ? (
+                    <div className="mt-2 flex items-center justify-between bg-gray-800 rounded px-2 py-1 text-sm text-gray-300">
+                      <span className="truncate">Applied: {csvFileName}</span>
+                      <button
+                        onClick={clearCsvLabel}
+                        className="text-gray-400 hover:text-red-400 ml-2"
+                        aria-label="Clear CSV status"
+                        title="Clears this label only — spine types already applied stay as set"
+                      >
+                        <TrashIcon className="size-4" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+                <div>
+                  <div
+                    data-success={coverExists ? true : undefined}
+                    className="text-gray-500 data-[success]:text-green-400"
+                  >
+                    <label
+                      {...getCoverRootProps({
+                        className:
+                          "flex flex-col items-center justify-center transition-colors border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-800 bg-gray-900 hover:bg-gray-100 border-gray-600 hover:border-gray-500 w-full h-28",
+                      })}
+                    >
+                      <div className="flex flex-col items-center justify-center py-4 px-6">
+                        <div className="text-lg font-bold flex flex-row items-center gap-1">
+                          Covers ({covers.length}){" "}
+                          {coverExists ? (
+                            <CheckIcon className="size-6" />
+                          ) : null}
+                        </div>
+                        {isCoverDragActive ? (
+                          <p className="mb-2 text-sm">Drop Covers Here</p>
                         ) : (
                           <p className="mb-2 text-sm">
                             <span className="font-semibold">
@@ -877,30 +1013,104 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                           </p>
                         )}
                       </div>
-                      <input {...getSpineInputProps()} ref={spineInputRef} />
+                      <input {...getCoverInputProps()} ref={coverInputRef} />
                     </label>
                   </div>
-                  {spines.length > 0 ? (
-                    <ul className="mt-2 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
-                      {spines.map((s) => (
-                        <li
-                          key={s.id}
-                          className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
-                        >
-                          <span className="truncate">{s.file.name}</span>
-                          <button
-                            onClick={() => removeSpine(s.id)}
-                            className="text-gray-400 hover:text-red-400 ml-2"
-                            aria-label={`Remove ${s.file.name}`}
+                  {covers.length > 0 ? (
+                    <>
+                      <ul className="mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
+                        {covers.map((c) => (
+                          <li
+                            key={c.id}
+                            className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
                           >
-                            <TrashIcon className="size-4" />
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
+                            <span className="truncate">{c.file.name}</span>
+                            <button
+                              onClick={() => removeCover(c.id)}
+                              className="text-gray-400 hover:text-red-400 ml-2"
+                              aria-label={`Remove ${c.file.name}`}
+                            >
+                              <TrashIcon className="size-4" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-2 mx-3 flex justify-end">
+                        <button
+                          onClick={clearAllCovers}
+                          className="text-sm font-medium text-gray-200 bg-gray-700 hover:bg-red-800 hover:text-white rounded-lg px-3 py-1.5"
+                        >
+                          Clear all covers
+                        </button>
+                      </div>
+                    </>
                   ) : null}
                 </div>
-              ) : null}
+                {anyNeedsSpine ? (
+                  <div>
+                    <div
+                      data-success={spineExists ? true : undefined}
+                      className="text-gray-500 data-[success]:text-green-400"
+                    >
+                      <label
+                        {...getSpineRootProps({
+                          className:
+                            "flex flex-col items-center justify-center transition-colors border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-800 bg-gray-900 hover:bg-gray-100 border-gray-600 hover:border-gray-500 w-full h-28",
+                        })}
+                      >
+                        <div className="flex flex-col items-center justify-center py-4 px-6">
+                          <div className="text-lg font-bold flex flex-row items-center gap-1">
+                            Spines ({spines.length}){" "}
+                            {spineExists ? (
+                              <CheckIcon className="size-6" />
+                            ) : null}
+                          </div>
+                          {isSpineDragActive ? (
+                            <p className="mb-2 text-sm">Drop Spines Here</p>
+                          ) : (
+                            <p className="mb-2 text-sm">
+                              <span className="font-semibold">
+                                Click to upload
+                              </span>{" "}
+                              or drag and drop multiple files
+                            </p>
+                          )}
+                        </div>
+                        <input {...getSpineInputProps()} ref={spineInputRef} />
+                      </label>
+                    </div>
+                    {spines.length > 0 ? (
+                      <>
+                        <ul className="mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
+                          {spines.map((s) => (
+                            <li
+                              key={s.id}
+                              className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
+                            >
+                              <span className="truncate">{s.file.name}</span>
+                              <button
+                                onClick={() => removeSpine(s.id)}
+                                className="text-gray-400 hover:text-red-400 ml-2"
+                                aria-label={`Remove ${s.file.name}`}
+                              >
+                                <TrashIcon className="size-4" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-2 mx-3 flex justify-end">
+                          <button
+                            onClick={clearAllSpines}
+                            className="text-sm font-medium text-gray-200 bg-gray-700 hover:bg-red-800 hover:text-white rounded-lg px-3 py-1.5"
+                          >
+                            Clear all spines
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             {rows.length > 0 ? (

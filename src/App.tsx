@@ -334,7 +334,7 @@ export default function App() {
       onPaste={handlePaste}
       autoFocus
       tabIndex={0}
-      className="flex items-center justify-center w-screen h-screen p-8 pb-20"
+      className="flex items-center justify-center w-full h-screen p-8 pb-20"
     >
       <section className="fixed right-4 top-4 flex flex-col items-stetch space-y-4 bg-gray-900 p-4 rounded-xl w-80">
         <Button
