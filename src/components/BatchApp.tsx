@@ -673,6 +673,10 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
 
   const coverExists = covers.length > 0;
   const spineExists = spines.length > 0;
+  // Nothing uploaded yet: center the upload boxes in the available space
+  // instead of pinning them near the top. Once anything's added, the
+  // section reverts to normal top-down flow so it can grow downward.
+  const nothingUploadedYet = !coverExists && !spineExists;
 
   // Spiral spine width is still a single, batch-wide setting (not per-row),
   // but the control should show up whenever it's relevant to any row — not
@@ -925,9 +929,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="w-full shrink-0 mt-12 space-y-6">
+          <div
+            className={
+              nothingUploadedYet
+                ? "flex-1 min-h-0 w-full flex flex-col justify-center space-y-6"
+                : "w-full shrink-0 mt-12 space-y-6"
+            }
+          >
             <div className="space-y-3">
-              {coverExists ? (
+              {/* Shown whenever anything's uploaded (covers or spines), not
+                  just covers — so this box is always the topmost thing and
+                  the covers/spines row below it never shifts any higher,
+                  even when only spines have been added so far. */}
+              {!nothingUploadedYet ? (
                 <div>
                   <div
                     data-success={csvFileName ? true : undefined}
