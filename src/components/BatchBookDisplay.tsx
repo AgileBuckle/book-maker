@@ -12,7 +12,7 @@ import {
   BrightnessContrast,
 } from "@react-three/postprocessing";
 import { Texture } from "three";
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { BookType, ScalingMode } from "../enums.ts";
 
 /**
@@ -277,7 +277,12 @@ function SettleWatcher({
   return null;
 }
 
-export default function BatchBookDisplay({
+/**
+ * Wrapped in memo() below for the same reason as BookDisplay.tsx: drei's
+ * AccumulativeShadows re-bakes its shadow on every re-render of its parent,
+ * even if none of these props changed. memo skips that wasted re-render.
+ */
+function BatchBookDisplay({
   coverUrl,
   spineUrl,
   backColor,
@@ -427,3 +432,5 @@ export default function BatchBookDisplay({
     </div>
   );
 }
+
+export default memo(BatchBookDisplay);

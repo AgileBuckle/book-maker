@@ -135,6 +135,17 @@ export default function App() {
   const [fileName, setFileName] = useState("Untitled");
   const [copied, setCopied] = useState(false);
 
+  // Mirrors the same "watchKey" the 3D view resets its shadow-settle timer
+  // on, so the Download/Copy buttons go gray at the exact moment the view
+  // starts re-rendering and light back up only once it's fully settled.
+  const [isRendering, setIsRendering] = useState(true);
+  useEffect(() => {
+    setIsRendering(true);
+  }, [coverUrl, spineUrl, backColor, spineWidth, bookType, scalingMode, size]);
+  const handleRenderSettled = useCallback(() => {
+    setIsRendering(false);
+  }, []);
+
   useEffect(() => {
     setBackColorTemp(backColor);
   }, [backColor]);
@@ -202,12 +213,14 @@ export default function App() {
   const isDragActive = isCoverDragActive || isSpineDragActive;
 
   const triggerDownload = useCallback(async () => {
+    if (isRendering) return;
     const canvas: HTMLCanvasElement | null = document.querySelector("canvas");
     if (canvas !== null)
       FileSaver.saveAs(await canvasToBlob(canvas), `${fileName}.png`);
-  }, [fileName]);
+  }, [fileName, isRendering]);
 
   const triggerCopy = useCallback(async () => {
+    if (isRendering) return;
     const canvas: HTMLCanvasElement | null = document.querySelector("canvas");
     if (canvas !== null) {
       try {
@@ -221,7 +234,7 @@ export default function App() {
         console.error(error);
       }
     }
-  }, []);
+  }, [isRendering]);
 
   const triggerColorPick = useCallback((event: MouseEvent) => {
     const canvas: HTMLCanvasElement | null = event.target as HTMLCanvasElement;
@@ -503,14 +516,16 @@ export default function App() {
         </Field>
         <Button
           onClick={triggerDownload}
-          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full"
+          disabled={isRendering}
+          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600"
         >
-          Download Image
+          {isRendering ? "Generating…" : "Download Image"}
         </Button>
         <Button
           onClick={triggerCopy}
+          disabled={isRendering}
           data-copied={copied ? true : undefined}
-          className="text-blue-500 focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 border bg-green-600/0 border-1 border-blue-500 hover:border-blue-300 hover:text-blue-300 focus:outline-none focus:ring-blue-800 w-full data-[copied=true]:border-transparent data-[copied=true]:text-white data-[copied=true]:bg-green-600 transition-colors duration-500"
+          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full data-[copied=true]:bg-green-600 transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600"
         >
           Copy Image
         </Button>
@@ -524,6 +539,7 @@ export default function App() {
           scalingMode={scalingMode}
           spineWidth={spineWidth}
           size={size}
+          onSettled={handleRenderSettled}
         />
       </main>
       <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center"></footer>

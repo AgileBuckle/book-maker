@@ -1,4 +1,4 @@
-import { Canvas, useLoader } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader } from "@react-three/fiber";
 import { BufferGeometry, TextureLoader } from "three";
 import {
   AccumulativeShadows,
@@ -12,7 +12,7 @@ import {
   BrightnessContrast,
 } from "@react-three/postprocessing";
 import { Texture } from "three";
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { BookType, ScalingMode } from "../enums.ts";
 
 function HardcoverBook({
@@ -233,7 +233,52 @@ function SpiralBoundBook({
   );
 }
 
-export default function BookDisplay({
+/**
+ * Fires `onSettled` once `targetFrames` real animation frames have elapsed
+ * since `watchKey` last changed. Used to detect when the temporal
+ * AccumulativeShadows pass (frames={100} below) has finished, so callers
+ * (like the Download/Copy buttons) can tell when the render is actually
+ * done instead of just guessing on a timer.
+ */
+function SettleWatcher({
+  watchKey,
+  onSettled,
+  targetFrames = 130,
+}: {
+  watchKey: string;
+  onSettled: () => void;
+  targetFrames?: number;
+}) {
+  const frameCount = useRef(0);
+  const fired = useRef(false);
+
+  useEffect(() => {
+    frameCount.current = 0;
+    fired.current = false;
+  }, [watchKey]);
+
+  useFrame(() => {
+    if (fired.current) return;
+    frameCount.current += 1;
+    if (frameCount.current >= targetFrames) {
+      fired.current = true;
+      onSettled();
+    }
+  });
+
+  return null;
+}
+
+/**
+ * Wrapped in memo() below: drei's AccumulativeShadows resets and re-bakes
+ * its shadow pass on every re-render of its parent tree (its reset effect
+ * has no dependency array), not just when the cover/spine/settings actually
+ * change. Without memo, an unrelated re-render of App (e.g. the Download/
+ * Copy buttons re-enabling) would re-render this component and visibly
+ * restart the shadow bake right after it just finished. memo skips the
+ * re-render entirely when none of these props actually changed.
+ */
+function BookDisplay({
   coverUrl,
   spineUrl,
   backColor,
@@ -241,6 +286,7 @@ export default function BookDisplay({
   bookType,
   scalingMode,
   size,
+  onSettled,
 }: {
   coverUrl: string;
   spineUrl: string;
@@ -249,6 +295,7 @@ export default function BookDisplay({
   bookType: BookType;
   scalingMode: ScalingMode;
   size: number;
+  onSettled?: () => void;
 }) {
   const coverMap = useLoader(TextureLoader, coverUrl);
   const spineMap = useLoader(TextureLoader, spineUrl);
@@ -288,6 +335,16 @@ export default function BookDisplay({
   const viewWidth = imageWidth / dpr;
   const viewHeight = imageHeight / dpr;
 
+  const watchKey = [
+    coverUrl,
+    spineUrl,
+    backColor,
+    spineWidth,
+    bookType,
+    scalingMode,
+    size,
+  ].join("|");
+
   useEffect(() => {
     console.log("zoom: ", zoom);
   }, [zoom]);
@@ -313,6 +370,9 @@ export default function BookDisplay({
           intensity={7300.0}
           distance={0}
         />
+        {onSettled ? (
+          <SettleWatcher watchKey={watchKey} onSettled={onSettled} />
+        ) : null}
         <EffectComposer enableNormalPass multisampling={32}>
           <BrightnessContrast contrast={0.1} />
           <FXAA />
@@ -372,3 +432,5 @@ export default function BookDisplay({
     </div>
   );
 }
+
+export default memo(BookDisplay);
