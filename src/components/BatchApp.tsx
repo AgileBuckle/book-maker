@@ -18,7 +18,6 @@ import {
   ListboxOption,
   ListboxOptions,
 } from "@headlessui/react";
-import { HexColorPicker } from "react-colorful";
 import FileSaver from "file-saver";
 import { parse as pathParse } from "path-browserify";
 import Psd from "@webtoon/psd";
@@ -31,6 +30,7 @@ import {
   matchCoversAndSpines,
 } from "../utils/fuzzyMatch";
 import { createZipBlob } from "../utils/zip";
+import { detectBackCoverColor } from "../utils/backColor";
 
 /* Duplicated from App.tsx on purpose: batch mode is kept fully independent
  * so nothing here can change how the existing single-image flow behaves. */
@@ -129,6 +129,12 @@ interface BatchRow {
   bookType: BookType;
   spineId: string | null;
   score: number | null;
+  // Hardcover back-cover wrap color. null until auto-detection resolves
+  // (or the row isn't a hardcover, in which case it's simply unused).
+  backColor: string | null;
+  // True once the user has manually picked a color for this row, so the
+  // auto-detect effect leaves it alone from then on.
+  backColorManual: boolean;
 }
 
 interface BatchResultEntry {
@@ -144,8 +150,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const [spines, setSpines] = useState<NamedFile[]>([]);
   const [rows, setRows] = useState<BatchRow[]>([]);
 
-  const [backColor, setBackColor] = useState("#3db999");
-  const [backColorTemp, setBackColorTemp] = useState("#3db999");
   const [bookType, setBookType] = useState<BookType>(BookType.PerfectBound);
   const [scalingMode, setScalingMode] = useState<ScalingMode>(
     ScalingMode.FixedWidth,
@@ -168,10 +172,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setSizeInUnitsText(null);
   };
 
-  useEffect(() => {
-    setBackColorTemp(backColor);
-  }, [backColor]);
-
   // `bookType` above is only the default applied to newly-added covers; each
   // row can override its own type individually (see setRowBookType). Read
   // the current default via a ref inside the rows effect so adding covers
@@ -188,14 +188,21 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       matchResult.pairs.map((pair) => [pair.coverId, pair]),
     );
     setRows((prev) => {
-      const prevBookTypeByCover = new Map(
-        prev.map((row) => [row.cover.id, row.bookType]),
-      );
+      const prevByCover = new Map(prev.map((row) => [row.cover.id, row]));
       return covers.map((cover) => {
-        const rowBookType =
-          prevBookTypeByCover.get(cover.id) ?? defaultBookTypeRef.current;
+        const prevRow = prevByCover.get(cover.id);
+        const rowBookType = prevRow?.bookType ?? defaultBookTypeRef.current;
+        const backColor = prevRow?.backColor ?? null;
+        const backColorManual = prevRow?.backColorManual ?? false;
         if (!needsSpineForType(rowBookType)) {
-          return { cover, bookType: rowBookType, spineId: null, score: null };
+          return {
+            cover,
+            bookType: rowBookType,
+            spineId: null,
+            score: null,
+            backColor,
+            backColorManual,
+          };
         }
         const match = matchByCover.get(cover.id);
         return {
@@ -203,6 +210,8 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           bookType: rowBookType,
           spineId: match ? match.spineId : null,
           score: match ? match.score : null,
+          backColor,
+          backColorManual,
         };
       });
     });
@@ -278,6 +287,16 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     );
   };
 
+  const setRowBackColor = (coverId: string, color: string) => {
+    setRows((prev) =>
+      prev.map((row) =>
+        row.cover.id === coverId
+          ? { ...row, backColor: color, backColorManual: true }
+          : row,
+      ),
+    );
+  };
+
   const removeCover = (coverId: string) => {
     setCovers((prev) => prev.filter((c) => c.id !== coverId));
   };
@@ -286,10 +305,46 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setSpines((prev) => prev.filter((s) => s.id !== spineId));
   };
 
+  // Auto-detect the back cover color for any hardcover row that doesn't
+  // have one yet (and hasn't been manually overridden). Tracks in-flight
+  // detections by cover id so a row is never sampled twice concurrently.
+  const backColorDetectingRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pending = rows.filter(
+      (row) =>
+        row.bookType === BookType.Hardcover &&
+        row.backColor === null &&
+        !row.backColorManual &&
+        !backColorDetectingRef.current.has(row.cover.id),
+    );
+    pending.forEach((row) => {
+      const coverId = row.cover.id;
+      backColorDetectingRef.current.add(coverId);
+      detectBackCoverColor(row.cover.url)
+        .then((color) => {
+          setRows((prev) =>
+            prev.map((r) =>
+              r.cover.id === coverId && !r.backColorManual
+                ? { ...r, backColor: color }
+                : r,
+            ),
+          );
+        })
+        .catch((error) => {
+          console.error("Back cover color detection failed:", error);
+        })
+        .finally(() => {
+          backColorDetectingRef.current.delete(coverId);
+        });
+    });
+  }, [rows]);
+
   const readyRows = useMemo(
     () =>
       rows.filter(
-        (row) => !needsSpineForType(row.bookType) || row.spineId !== null,
+        (row) =>
+          (!needsSpineForType(row.bookType) || row.spineId !== null) &&
+          (row.bookType !== BookType.Hardcover || row.backColor !== null),
       ),
     [rows],
   );
@@ -374,15 +429,13 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const coverExists = covers.length > 0;
   const spineExists = spines.length > 0;
 
-  // Back cover color and spiral spine width are still single, batch-wide
-  // settings (not per-row), but the controls for them should show up
-  // whenever they're relevant to any row — not just when they match the
-  // default type — since a row can be switched away from the default.
+  // Spiral spine width is still a single, batch-wide setting (not per-row),
+  // but the control should show up whenever it's relevant to any row — not
+  // just when it matches the default type — since a row can be switched
+  // away from the default. (Hardcover back cover color, by contrast, is
+  // now automatic and per-row — see the color swatch in each row below.)
   const anyNeedsSpine =
     defaultNeedsSpine || rows.some((row) => needsSpineForType(row.bookType));
-  const anyHardcover =
-    bookType === BookType.Hardcover ||
-    rows.some((row) => row.bookType === BookType.Hardcover);
   const anySpiralBound =
     bookType === BookType.SpiralBound ||
     rows.some((row) => row.bookType === BookType.SpiralBound);
@@ -430,30 +483,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             individually in the list below.
           </p>
         </Field>
-        {anyHardcover ? (
-          <div className="space-y-4">
-            <label
-              htmlFor="batch_color_hex"
-              className="block mb-2 text-sm font-medium text-white"
-            >
-              Back Cover
-            </label>
-            <HexColorPicker color={backColor} onChange={setBackColor} />
-            <Input
-              type="text"
-              id="batch_color_hex"
-              className="border text-sm rounded-lg block w-full p-2.5 bg-gray-800 border-gray-600 placeholder-gray-300 text-white focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
-              placeholder="#ffffff"
-              value={backColorTemp}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                const value = event.target.value;
-                if (value.length > 7) return;
-                if (/^#([0-9A-F]{3}){1,2}$/i.test(value)) setBackColor(value);
-                setBackColorTemp(value);
-              }}
-            />
-          </div>
-        ) : null}
         {anySpiralBound ? (
           <Field className="space-y-4">
             <Label className="block mb-2 text-sm font-medium text-white">
@@ -564,7 +593,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             <BatchBookDisplay
               coverUrl={currentRow?.cover.url ?? defaultCover}
               spineUrl={currentSpine?.url ?? defaultSpine}
-              backColor={backColor}
+              backColor={currentRow?.backColor ?? "#ffffff"}
               bookType={currentRow?.bookType ?? bookType}
               scalingMode={scalingMode}
               spineWidth={spineWidth}
@@ -764,6 +793,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                           </option>
                         ))}
                       </select>
+                      {row.bookType === BookType.Hardcover ? (
+                        <input
+                          type="color"
+                          className="shrink-0 h-7 w-9 rounded border border-gray-600 bg-gray-700 p-0.5 disabled:cursor-wait disabled:opacity-60"
+                          value={row.backColor ?? "#000000"}
+                          disabled={row.backColor === null}
+                          aria-label={`Back cover color for ${row.cover.file.name}`}
+                          title={row.backColor ?? "Detecting color…"}
+                          onChange={(event) =>
+                            setRowBackColor(row.cover.id, event.target.value)
+                          }
+                        />
+                      ) : null}
                     </div>
                   ))}
                 </div>

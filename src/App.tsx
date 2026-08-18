@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { HexColorPicker } from "react-colorful";
+import { detectBackCoverColor } from "./utils/backColor";
 import {
   Button,
   Field,
@@ -109,6 +110,11 @@ export default function App() {
   const [unknownUrl, setUnknownUrl] = useState<string | null>(null);
   const [backColor, setBackColor] = useState("#3db999");
   const [backColorTemp, setBackColorTemp] = useState("#3db999");
+  // Whether `backColor` should still be kept in sync with an automatic
+  // guess. Any manual edit (picker, hex field, eyedropper) turns this off;
+  // uploading a new cover turns it back on so the next cover gets its own
+  // fresh guess.
+  const [backColorAuto, setBackColorAuto] = useState(true);
   const [bookType, setBookType] = useState<BookType>(BookType.PerfectBound);
 
   const [scalingMode, setScalingMode] = useState<ScalingMode>(
@@ -149,6 +155,29 @@ export default function App() {
   useEffect(() => {
     setBackColorTemp(backColor);
   }, [backColor]);
+
+  // A newly uploaded cover gets its own fresh auto-guess, even if the
+  // previous cover's color had been manually overridden.
+  useEffect(() => {
+    setBackColorAuto(true);
+  }, [coverUrl]);
+
+  useEffect(() => {
+    if (bookType !== BookType.Hardcover) return;
+    if (!backColorAuto) return;
+    if (coverUrl === defaultCover) return;
+    let cancelled = false;
+    detectBackCoverColor(coverUrl)
+      .then((color) => {
+        if (!cancelled) setBackColor(color);
+      })
+      .catch((error) => {
+        console.error("Back cover color detection failed:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookType, coverUrl, backColorAuto]);
 
   const {
     getRootProps: getCoverRootProps,
@@ -256,6 +285,7 @@ export default function App() {
         pixels,
       );
       setBackColor(rgbToHex(pixels[0], pixels[1], pixels[2]));
+      setBackColorAuto(false);
     }
   }, []);
 
@@ -407,7 +437,18 @@ export default function App() {
             >
               Back Cover
             </label>
-            <HexColorPicker color={backColor} onChange={setBackColor} />
+            <p className="-mt-1 mb-2 text-xs text-gray-400">
+              {backColorAuto
+                ? "Auto-detected from the cover's top edge."
+                : "Custom color."}
+            </p>
+            <HexColorPicker
+              color={backColor}
+              onChange={(color) => {
+                setBackColor(color);
+                setBackColorAuto(false);
+              }}
+            />
             <div className="relative w-full flex">
               <Input
                 type="text"
@@ -418,7 +459,10 @@ export default function App() {
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
                   const value = event.target.value;
                   if (value.length > 7) return;
-                  if (/^#([0-9A-F]{3}){1,2}$/i.test(value)) setBackColor(value);
+                  if (/^#([0-9A-F]{3}){1,2}$/i.test(value)) {
+                    setBackColor(value);
+                    setBackColorAuto(false);
+                  }
                   setBackColorTemp(value);
                 }}
               />
