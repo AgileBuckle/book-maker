@@ -20,8 +20,12 @@ import {
 } from "@headlessui/react";
 import FileSaver from "file-saver";
 import { parse as pathParse } from "path-browserify";
-import Psd from "@webtoon/psd";
-import { CheckIcon, TrashIcon } from "@heroicons/react/16/solid";
+import {
+  CheckIcon,
+  ExclamationTriangleIcon,
+  TrashIcon,
+  XMarkIcon,
+} from "@heroicons/react/16/solid";
 import { BookType, ScalingMode } from "../enums.ts";
 import BatchBookDisplay from "./BatchBookDisplay";
 import {
@@ -31,35 +35,15 @@ import {
 } from "../utils/fuzzyMatch";
 import { createZipBlob } from "../utils/zip";
 import { detectBackCoverColor } from "../utils/backColor";
+import {
+  ImageLoadError,
+  detectFileKind,
+  loadImageUrl,
+  releaseImageUrl,
+} from "../utils/imageLoader";
 
 /* Duplicated from App.tsx on purpose: batch mode is kept fully independent
  * so nothing here can change how the existing single-image flow behaves. */
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function psdToDataUrl(blob: Blob): Promise<string> {
-  const psdFile = Psd.parse(await blob.arrayBuffer());
-  const compositeBuffer = await psdFile.composite();
-  const imageData = new ImageData(
-    compositeBuffer,
-    psdFile.width,
-    psdFile.height,
-  );
-
-  const offscreen = new OffscreenCanvas(psdFile.width, psdFile.height);
-  const context = offscreen.getContext("2d");
-
-  context?.putImageData(imageData, 0, 0);
-  return await blobToDataUrl(
-    await offscreen.convertToBlob({ type: "image/png" }),
-  );
-}
-
 async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve) => {
     canvas.toBlob((blob) => {
@@ -69,28 +53,40 @@ async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
-async function fileToNamedFile(file: File): Promise<NamedFile | null> {
-  let url: string | null = null;
-  if (file.type === "image/png") {
-    url = await blobToDataUrl(file);
-  } else if (
-    ["image/vnd.adobe.photoshop", "application/x-photoshop"].includes(
-      file.type,
-    )
-  ) {
-    url = await psdToDataUrl(file);
+/**
+ * Wraps freshly-dropped files into NamedFiles without decoding any image
+ * data — just enough to know each file is a supported type so it can be
+ * matched by name and (later, lazily) opened. Anything that isn't a
+ * recognizable PNG or PSD is reported back instead of silently disappearing.
+ */
+function wrapDroppedFiles(files: File[]): {
+  valid: NamedFile[];
+  rejected: string[];
+} {
+  const valid: NamedFile[] = [];
+  const rejected: string[] = [];
+  for (const file of files) {
+    if (detectFileKind(file) === null) {
+      rejected.push(file.name);
+      continue;
+    }
+    valid.push({
+      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
+        .toString(36)
+        .slice(2)}`,
+      file,
+    });
   }
-  if (url === null) return null;
-  return {
-    id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
-      .toString(36)
-      .slice(2)}`,
-    file,
-    url,
-  };
+  return { valid, rejected };
 }
 
-const defaultCover = "template-cover.png";
+function describeRejectedFiles(names: string[], label: string): string {
+  const count = names.length;
+  return `Skipped ${count} ${label} file${count === 1 ? "" : "s"} that ${
+    count === 1 ? "isn't" : "aren't"
+  } a supported PNG or PSD: ${names.join(", ")}.`;
+}
+
 const defaultSpine = "template-spine.png";
 
 const bookTypeLabels = new Map<BookType, string>([
@@ -135,6 +131,10 @@ interface BatchRow {
   // True once the user has manually picked a color for this row, so the
   // auto-detect effect leaves it alone from then on.
   backColorManual: boolean;
+  // Set if auto-detection couldn't open the cover image to sample a color;
+  // backColor falls back to white so the row still becomes ready, but this
+  // flags that the color is a guess-free default the user should check.
+  backColorError: string | null;
 }
 
 interface BatchResultEntry {
@@ -149,6 +149,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const [covers, setCovers] = useState<NamedFile[]>([]);
   const [spines, setSpines] = useState<NamedFile[]>([]);
   const [rows, setRows] = useState<BatchRow[]>([]);
+  const [dropError, setDropError] = useState<string | null>(null);
 
   const [bookType, setBookType] = useState<BookType>(BookType.PerfectBound);
   const [scalingMode, setScalingMode] = useState<ScalingMode>(
@@ -194,6 +195,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         const rowBookType = prevRow?.bookType ?? defaultBookTypeRef.current;
         const backColor = prevRow?.backColor ?? null;
         const backColorManual = prevRow?.backColorManual ?? false;
+        const backColorError = prevRow?.backColorError ?? null;
         if (!needsSpineForType(rowBookType)) {
           return {
             cover,
@@ -202,6 +204,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             score: null,
             backColor,
             backColorManual,
+            backColorError,
           };
         }
         const match = matchByCover.get(cover.id);
@@ -212,6 +215,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           score: match ? match.score : null,
           backColor,
           backColorManual,
+          backColorError,
         };
       });
     });
@@ -221,11 +225,14 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     getRootProps: getCoverRootProps,
     getInputProps: getCoverInputProps,
     isDragActive: isCoverDragActive,
+    fileRejections: coverFileRejections,
   } = useDropzone({
-    onDrop: async (acceptedFiles) => {
-      const converted = await Promise.all(acceptedFiles.map(fileToNamedFile));
-      const valid = converted.filter((f): f is NamedFile => f !== null);
+    onDrop: (acceptedFiles) => {
+      const { valid, rejected } = wrapDroppedFiles(acceptedFiles);
       setCovers((prev) => [...prev, ...valid]);
+      setDropError(
+        rejected.length > 0 ? describeRejectedFiles(rejected, "cover") : null,
+      );
       if (coverInputRef.current !== null) coverInputRef.current.value = "";
     },
     accept: {
@@ -240,11 +247,14 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     getRootProps: getSpineRootProps,
     getInputProps: getSpineInputProps,
     isDragActive: isSpineDragActive,
+    fileRejections: spineFileRejections,
   } = useDropzone({
-    onDrop: async (acceptedFiles) => {
-      const converted = await Promise.all(acceptedFiles.map(fileToNamedFile));
-      const valid = converted.filter((f): f is NamedFile => f !== null);
+    onDrop: (acceptedFiles) => {
+      const { valid, rejected } = wrapDroppedFiles(acceptedFiles);
       setSpines((prev) => [...prev, ...valid]);
+      setDropError(
+        rejected.length > 0 ? describeRejectedFiles(rejected, "spine") : null,
+      );
       if (spineInputRef.current !== null) spineInputRef.current.value = "";
     },
     accept: {
@@ -254,6 +264,31 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     },
     multiple: true,
   });
+
+  // react-dropzone routes files that fail its own extension/MIME check
+  // (e.g. a .jpg or .txt dropped by mistake) into fileRejections instead of
+  // acceptedFiles, so they'd otherwise vanish with no feedback at all.
+  useEffect(() => {
+    if (coverFileRejections.length > 0) {
+      setDropError(
+        describeRejectedFiles(
+          coverFileRejections.map((r) => r.file.name),
+          "cover",
+        ),
+      );
+    }
+  }, [coverFileRejections]);
+
+  useEffect(() => {
+    if (spineFileRejections.length > 0) {
+      setDropError(
+        describeRejectedFiles(
+          spineFileRejections.map((r) => r.file.name),
+          "spine",
+        ),
+      );
+    }
+  }, [spineFileRejections]);
 
   const setRowSpine = (coverId: string, spineId: string | null) => {
     setRows((prev) =>
@@ -291,7 +326,12 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setRows((prev) =>
       prev.map((row) =>
         row.cover.id === coverId
-          ? { ...row, backColor: color, backColorManual: true }
+          ? {
+              ...row,
+              backColor: color,
+              backColorManual: true,
+              backColorError: null,
+            }
           : row,
       ),
     );
@@ -299,15 +339,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
 
   const removeCover = (coverId: string) => {
     setCovers((prev) => prev.filter((c) => c.id !== coverId));
+    releaseImageUrl(coverId);
   };
 
   const removeSpine = (spineId: string) => {
     setSpines((prev) => prev.filter((s) => s.id !== spineId));
+    releaseImageUrl(spineId);
   };
 
   // Auto-detect the back cover color for any hardcover row that doesn't
   // have one yet (and hasn't been manually overridden). Tracks in-flight
   // detections by cover id so a row is never sampled twice concurrently.
+  // The cover image is opened just for this one sample and released again
+  // right after, rather than staying decoded in memory until batch time.
   const backColorDetectingRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const pending = rows.filter(
@@ -320,22 +364,35 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     pending.forEach((row) => {
       const coverId = row.cover.id;
       backColorDetectingRef.current.add(coverId);
-      detectBackCoverColor(row.cover.url)
-        .then((color) => {
+      (async () => {
+        try {
+          const url = await loadImageUrl(row.cover);
+          const color = await detectBackCoverColor(url);
           setRows((prev) =>
             prev.map((r) =>
               r.cover.id === coverId && !r.backColorManual
-                ? { ...r, backColor: color }
+                ? { ...r, backColor: color, backColorError: null }
                 : r,
             ),
           );
-        })
-        .catch((error) => {
+        } catch (error) {
+          const message =
+            error instanceof ImageLoadError
+              ? error.message
+              : `Couldn't sample a back-cover color for "${row.cover.file.name}" — pick one manually.`;
           console.error("Back cover color detection failed:", error);
-        })
-        .finally(() => {
+          setRows((prev) =>
+            prev.map((r) =>
+              r.cover.id === coverId && !r.backColorManual
+                ? { ...r, backColor: "#ffffff", backColorError: message }
+                : r,
+            ),
+          );
+        } finally {
+          releaseImageUrl(coverId);
           backColorDetectingRef.current.delete(coverId);
-        });
+        }
+      })();
     });
   }, [rows]);
 
@@ -353,21 +410,91 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [statusText, setStatusText] = useState("");
+  const [isLoadingCurrent, setIsLoadingCurrent] = useState(false);
+  const [currentUrls, setCurrentUrls] = useState<{
+    cover: string;
+    spine: string;
+  } | null>(null);
+  const [batchError, setBatchError] = useState<{
+    fileName: string;
+    message: string;
+  } | null>(null);
   const resultsRef = useRef<BatchResultEntry[]>([]);
   const usedNamesRef = useRef<Set<string>>(new Set());
   const previewRef = useRef<HTMLDivElement>(null);
+  // Id of the cover currently held open in memory for the in-progress row,
+  // so it can be released as soon as we move past it.
+  const loadedCoverIdRef = useRef<string | null>(null);
 
   const currentRow = isProcessing ? readyRows[currentIndex] : undefined;
-  const currentSpine = currentRow?.spineId
-    ? spines.find((s) => s.id === currentRow.spineId)
-    : undefined;
+
+  // Opens the current row's cover (and spine, if any) only when it's that
+  // row's turn — "open images individually" rather than decoding every
+  // image in the batch up front. The previous row's cover is released here
+  // too, once we know we're done with it, to keep memory use bounded no
+  // matter how large the batch is.
+  useEffect(() => {
+    if (!isProcessing) return;
+    const row = readyRows[currentIndex];
+    if (!row) return;
+
+    let cancelled = false;
+    setCurrentUrls(null);
+    setIsLoadingCurrent(true);
+    setStatusText(`Loading ${currentIndex + 1} of ${readyRows.length}…`);
+
+    (async () => {
+      try {
+        const coverUrl = await loadImageUrl(row.cover);
+        let spineUrl = defaultSpine;
+        if (row.spineId) {
+          const spine = spines.find((s) => s.id === row.spineId);
+          if (spine) spineUrl = await loadImageUrl(spine);
+        }
+        if (cancelled) return;
+
+        if (
+          loadedCoverIdRef.current &&
+          loadedCoverIdRef.current !== row.cover.id
+        ) {
+          releaseImageUrl(loadedCoverIdRef.current);
+        }
+        loadedCoverIdRef.current = row.cover.id;
+
+        setCurrentUrls({ cover: coverUrl, spine: spineUrl });
+        setIsLoadingCurrent(false);
+        setStatusText(`Generating ${currentIndex + 1} of ${readyRows.length}…`);
+      } catch (error) {
+        if (cancelled) return;
+        const fileName =
+          error instanceof ImageLoadError
+            ? error.fileName
+            : row.cover.file.name;
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Something went wrong loading this image.";
+        setBatchError({ fileName, message });
+        setIsProcessing(false);
+        setIsLoadingCurrent(false);
+        setStatusText("");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isProcessing, currentIndex, readyRows, spines]);
 
   const handleStart = () => {
     if (readyRows.length === 0) return;
     resultsRef.current = [];
     usedNamesRef.current = new Set();
+    loadedCoverIdRef.current = null;
+    setBatchError(null);
+    setCurrentUrls(null);
     setCurrentIndex(0);
-    setStatusText(`Generating 1 of ${readyRows.length}…`);
+    setStatusText(`Loading 1 of ${readyRows.length}…`);
     setIsProcessing(true);
   };
 
@@ -375,6 +502,12 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setIsProcessing(false);
     resultsRef.current = [];
     setStatusText("");
+    setCurrentUrls(null);
+    setIsLoadingCurrent(false);
+    if (loadedCoverIdRef.current) {
+      releaseImageUrl(loadedCoverIdRef.current);
+      loadedCoverIdRef.current = null;
+    }
   };
 
   const finishBatch = useCallback(async () => {
@@ -386,7 +519,12 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     );
     const zipBlob = await createZipBlob(entries);
     FileSaver.saveAs(zipBlob, "book-maker-batch.zip");
+    if (loadedCoverIdRef.current) {
+      releaseImageUrl(loadedCoverIdRef.current);
+      loadedCoverIdRef.current = null;
+    }
     setIsProcessing(false);
+    setCurrentUrls(null);
     setStatusText(
       `Done — downloaded ${entries.length} image${
         entries.length === 1 ? "" : "s"
@@ -413,14 +551,10 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
 
       const nextIndex = currentIndex + 1;
       if (nextIndex < readyRows.length) {
-        setStatusText(
-          `Generating ${nextIndex + 1} of ${readyRows.length}…`,
-        );
+        setStatusText(`Generating ${nextIndex + 1} of ${readyRows.length}…`);
         setCurrentIndex(nextIndex);
       } else {
-        setStatusText(
-          `Finishing up — zipping ${readyRows.length} images…`,
-        );
+        setStatusText(`Finishing up — zipping ${readyRows.length} images…`);
         finishBatch();
       }
     });
@@ -439,6 +573,10 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const anySpiralBound =
     bookType === BookType.SpiralBound ||
     rows.some((row) => row.bookType === BookType.SpiralBound);
+
+  const progressPercent = isProcessing
+    ? Math.round((currentIndex / Math.max(readyRows.length, 1)) * 100)
+    : 0;
 
   return (
     <div className="flex items-center justify-center w-screen min-h-screen p-8 pb-20">
@@ -582,24 +720,76 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             Cancel
           </Button>
         )}
+        {isProcessing ? (
+          <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-600 transition-all duration-300 ease-out"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        ) : null}
         {statusText ? (
           <div className="text-sm text-gray-200 text-center">{statusText}</div>
         ) : null}
       </section>
 
       <main className="flex flex-col gap-6 items-center w-full max-w-6xl mt-4">
+        {batchError ? (
+          <div className="w-full bg-red-950 border border-red-700 rounded-xl p-4 text-red-100">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="font-bold">
+                  Batch stopped — couldn't open "{batchError.fileName}"
+                </div>
+                <p className="text-sm mt-1 text-red-200">
+                  {batchError.message}
+                </p>
+              </div>
+              <button
+                onClick={() => setBatchError(null)}
+                className="text-red-300 hover:text-white shrink-0"
+                aria-label="Dismiss error"
+              >
+                <XMarkIcon className="size-5" />
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {dropError ? (
+          <div className="w-full bg-yellow-950 border border-yellow-700 rounded-xl p-4 text-yellow-100">
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-sm">{dropError}</p>
+              <button
+                onClick={() => setDropError(null)}
+                className="text-yellow-300 hover:text-white shrink-0"
+                aria-label="Dismiss warning"
+              >
+                <XMarkIcon className="size-5" />
+              </button>
+            </div>
+          </div>
+        ) : null}
         {isProcessing ? (
           <div ref={previewRef} className="flex flex-col items-center mt-12">
-            <BatchBookDisplay
-              coverUrl={currentRow?.cover.url ?? defaultCover}
-              spineUrl={currentSpine?.url ?? defaultSpine}
-              backColor={currentRow?.backColor ?? "#ffffff"}
-              bookType={currentRow?.bookType ?? bookType}
-              scalingMode={scalingMode}
-              spineWidth={spineWidth}
-              size={size}
-              onSettled={handleSettled}
-            />
+            {currentUrls ? (
+              <BatchBookDisplay
+                coverUrl={currentUrls.cover}
+                spineUrl={currentUrls.spine}
+                backColor={currentRow?.backColor ?? "#ffffff"}
+                bookType={currentRow?.bookType ?? bookType}
+                scalingMode={scalingMode}
+                spineWidth={spineWidth}
+                size={size}
+                onSettled={handleSettled}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center gap-3 h-64 w-64">
+                <div className="size-10 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin" />
+                <div className="text-gray-300 text-sm">
+                  {isLoadingCurrent ? "Loading image…" : ""}
+                </div>
+              </div>
+            )}
             <div className="text-white mt-10 text-center">
               {currentRow ? (
                 <div className="font-medium">{currentRow.cover.file.name}</div>
@@ -672,13 +862,17 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                       <div className="flex flex-col items-center justify-center py-4 px-6">
                         <div className="text-lg font-bold flex flex-row items-center gap-1">
                           Spines ({spines.length}){" "}
-                          {spineExists ? <CheckIcon className="size-6" /> : null}
+                          {spineExists ? (
+                            <CheckIcon className="size-6" />
+                          ) : null}
                         </div>
                         {isSpineDragActive ? (
                           <p className="mb-2 text-sm">Drop Spines Here</p>
                         ) : (
                           <p className="mb-2 text-sm">
-                            <span className="font-semibold">Click to upload</span>{" "}
+                            <span className="font-semibold">
+                              Click to upload
+                            </span>{" "}
                             or drag and drop multiple files
                           </p>
                         )}
@@ -733,9 +927,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                       </span>
                       {needsSpineForType(row.bookType) ? (
                         <>
-                          <span className="shrink-0 text-gray-500">
-                            {"↔"}
-                          </span>
+                          <span className="shrink-0 text-gray-500">{"↔"}</span>
                           <select
                             className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
                             value={row.spineId ?? ""}
@@ -794,17 +986,24 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                         ))}
                       </select>
                       {row.bookType === BookType.Hardcover ? (
-                        <input
-                          type="color"
-                          className="shrink-0 h-7 w-9 rounded border border-gray-600 bg-gray-700 p-0.5 disabled:cursor-wait disabled:opacity-60"
-                          value={row.backColor ?? "#000000"}
-                          disabled={row.backColor === null}
-                          aria-label={`Back cover color for ${row.cover.file.name}`}
-                          title={row.backColor ?? "Detecting color…"}
-                          onChange={(event) =>
-                            setRowBackColor(row.cover.id, event.target.value)
-                          }
-                        />
+                        <div className="shrink-0 flex items-center gap-1">
+                          <input
+                            type="color"
+                            className="h-7 w-9 rounded border border-gray-600 bg-gray-700 p-0.5 disabled:cursor-wait disabled:opacity-60"
+                            value={row.backColor ?? "#000000"}
+                            disabled={row.backColor === null}
+                            aria-label={`Back cover color for ${row.cover.file.name}`}
+                            title={row.backColor ?? "Detecting color…"}
+                            onChange={(event) =>
+                              setRowBackColor(row.cover.id, event.target.value)
+                            }
+                          />
+                          {row.backColorError ? (
+                            <span title={row.backColorError}>
+                              <ExclamationTriangleIcon className="size-4 text-yellow-400" />
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   ))}

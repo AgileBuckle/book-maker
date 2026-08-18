@@ -9,7 +9,6 @@
 export interface NamedFile {
   id: string;
   file: File;
-  url: string;
 }
 
 const STOP_WORDS = new Set([
@@ -150,7 +149,10 @@ export function matchCoversAndSpines(
 
   for (const candidate of candidates) {
     if (candidate.score < MATCH_THRESHOLD) break;
-    if (usedCovers.has(candidate.coverId) || usedSpines.has(candidate.spineId)) {
+    if (
+      usedCovers.has(candidate.coverId) ||
+      usedSpines.has(candidate.spineId)
+    ) {
       continue;
     }
     usedCovers.add(candidate.coverId);
