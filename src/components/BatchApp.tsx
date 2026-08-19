@@ -17,7 +17,11 @@ import {
   ListboxButton,
   ListboxOption,
   ListboxOptions,
+  Popover,
+  PopoverButton,
+  PopoverPanel,
 } from "@headlessui/react";
+import { HexColorPicker } from "react-colorful";
 import FileSaver from "file-saver";
 import { parse as pathParse } from "path-browserify";
 import {
@@ -151,6 +155,13 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   const [covers, setCovers] = useState<NamedFile[]>([]);
   const [spines, setSpines] = useState<NamedFile[]>([]);
   const [rows, setRows] = useState<BatchRow[]>([]);
+  // Raw text of each row's back-cover hex input, keyed by cover id — kept
+  // separate from the committed `backColor` (same pattern as single mode's
+  // backColorTemp) so a partial hex string like "#3d" isn't clobbered by
+  // the committed color while the user is still typing.
+  const [colorHexDrafts, setColorHexDrafts] = useState<Record<string, string>>(
+    {},
+  );
   const [dropError, setDropError] = useState<string | null>(null);
   // Optional CSV (book name, spine type) that bulk-sets each row's book
   // type. `csvFileName` is just a status label — re-running the same file
@@ -1180,25 +1191,44 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                       {needsSpineForType(row.bookType) ? (
                         <>
                           <span className="shrink-0 text-gray-500">{"↔"}</span>
-                          <select
-                            className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
-                            value={row.spineId ?? ""}
-                            onChange={(event) =>
-                              setRowSpine(
-                                row.cover.id,
-                                event.target.value === ""
-                                  ? null
-                                  : event.target.value,
-                              )
-                            }
-                          >
-                            <option value="">{"— none —"}</option>
-                            {spines.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.file.name}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="relative flex-1 min-w-0">
+                            <Listbox
+                              value={row.spineId}
+                              onChange={(value) =>
+                                setRowSpine(row.cover.id, value)
+                              }
+                            >
+                              <ListboxButton
+                                aria-label={`Spine for ${row.cover.file.name}`}
+                                className="border text-sm rounded-lg block w-full truncate text-left px-2 py-1 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+                              >
+                                {row.spineId === null
+                                  ? "— none —"
+                                  : (spines.find((s) => s.id === row.spineId)
+                                      ?.file.name ?? "— none —")}
+                              </ListboxButton>
+                              <ListboxOptions
+                                anchor="bottom start"
+                                className="z-50 [--anchor-gap:4px] themed-scrollbar border text-sm rounded-lg block max-h-60 overflow-y-auto w-[var(--button-width)] bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+                              >
+                                <ListboxOption
+                                  value={null}
+                                  className="px-2 py-1 truncate hover:bg-gray-800 cursor-pointer"
+                                >
+                                  {"— none —"}
+                                </ListboxOption>
+                                {spines.map((s) => (
+                                  <ListboxOption
+                                    value={s.id}
+                                    key={s.id}
+                                    className="px-2 py-1 truncate hover:bg-gray-800 cursor-pointer"
+                                  >
+                                    {s.file.name}
+                                  </ListboxOption>
+                                ))}
+                              </ListboxOptions>
+                            </Listbox>
+                          </div>
                           {row.spineId !== null ? (
                             <span
                               className={
@@ -1220,36 +1250,94 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                           )}
                         </>
                       ) : null}
-                      <select
-                        className="shrink-0 w-40 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-sm"
-                        value={row.bookType}
-                        aria-label={`Book type for ${row.cover.file.name}`}
-                        onChange={(event) =>
-                          setRowBookType(
-                            row.cover.id,
-                            Number(event.target.value) as BookType,
-                          )
-                        }
-                      >
-                        {[...bookTypeLabels.entries()].map(([type, label]) => (
-                          <option key={type} value={type}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative shrink-0 w-40">
+                        <Listbox
+                          value={row.bookType}
+                          onChange={(value) =>
+                            setRowBookType(row.cover.id, value)
+                          }
+                        >
+                          <ListboxButton
+                            aria-label={`Book type for ${row.cover.file.name}`}
+                            className="border text-sm rounded-lg block w-full truncate text-left px-2 py-1 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            {bookTypeLabels.get(row.bookType)}
+                          </ListboxButton>
+                          <ListboxOptions
+                            anchor="bottom end"
+                            className="z-50 [--anchor-gap:4px] border text-sm rounded-lg block overflow-clip w-[var(--button-width)] bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            {[...bookTypeLabels.entries()].map(
+                              ([type, label]) => (
+                                <ListboxOption
+                                  value={type}
+                                  key={type}
+                                  className="px-2 py-1 hover:bg-gray-800 cursor-pointer"
+                                >
+                                  {label}
+                                </ListboxOption>
+                              ),
+                            )}
+                          </ListboxOptions>
+                        </Listbox>
+                      </div>
                       {row.bookType === BookType.Hardcover ? (
                         <div className="shrink-0 flex items-center gap-1">
-                          <input
-                            type="color"
-                            className="h-7 w-9 rounded border border-gray-600 bg-gray-700 p-0.5 disabled:cursor-wait disabled:opacity-60"
-                            value={row.backColor ?? "#000000"}
-                            disabled={row.backColor === null}
-                            aria-label={`Back cover color for ${row.cover.file.name}`}
-                            title={row.backColor ?? "Detecting color…"}
-                            onChange={(event) =>
-                              setRowBackColor(row.cover.id, event.target.value)
-                            }
-                          />
+                          <Popover>
+                            <PopoverButton
+                              disabled={row.backColor === null}
+                              aria-label={`Back cover color for ${row.cover.file.name}`}
+                              title={row.backColor ?? "Detecting color…"}
+                              onClick={() =>
+                                setColorHexDrafts((prev) => ({
+                                  ...prev,
+                                  [row.cover.id]: row.backColor ?? "",
+                                }))
+                              }
+                              style={{
+                                backgroundColor: row.backColor ?? "#000000",
+                              }}
+                              className="h-7 w-9 rounded border border-gray-600 disabled:cursor-wait disabled:opacity-60"
+                            />
+                            <PopoverPanel
+                              anchor="bottom end"
+                              className="z-50 [--anchor-gap:4px] flex flex-col gap-3 rounded-lg border border-gray-600 bg-gray-900 p-3 shadow-xl"
+                            >
+                              <HexColorPicker
+                                color={row.backColor ?? "#000000"}
+                                onChange={(color) => {
+                                  setRowBackColor(row.cover.id, color);
+                                  setColorHexDrafts((prev) => ({
+                                    ...prev,
+                                    [row.cover.id]: color,
+                                  }));
+                                }}
+                              />
+                              <Input
+                                type="text"
+                                className="border text-sm rounded-lg block w-full p-2.5 bg-gray-800 border-gray-600 placeholder-gray-300 text-white focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
+                                placeholder="#ffffff"
+                                value={
+                                  colorHexDrafts[row.cover.id] ??
+                                  row.backColor ??
+                                  ""
+                                }
+                                onChange={(
+                                  event: ChangeEvent<HTMLInputElement>,
+                                ) => {
+                                  const value = event.target.value;
+                                  if (value.length > 7) return;
+                                  if (/^#([0-9A-F]{3}){1,2}$/i.test(value)) {
+                                    setRowBackColor(row.cover.id, value);
+                                  }
+                                  setColorHexDrafts((prev) => ({
+                                    ...prev,
+                                    [row.cover.id]: value,
+                                  }));
+                                }}
+                              />
+                            </PopoverPanel>
+                          </Popover>
                           {row.backColorError ? (
                             <span title={row.backColorError}>
                               <ExclamationTriangleIcon className="size-4 text-yellow-400" />

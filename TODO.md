@@ -12,4 +12,4 @@
 - [x] Fix scaling colliding with book type selector in batch mode
 - [x] Make design consistent between the two.
 - [x] Make the scrollbars match the asthetic.
-- [ ] Make the custom color picker in batch match the one used for single.
+- [x] Make the custom color picker in batch match the one used for single.
