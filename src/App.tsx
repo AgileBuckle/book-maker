@@ -381,7 +381,10 @@ export default function App() {
               <ListboxButton className="border text-sm rounded-lg block w-full text-left p-2.5 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
                 {bookTypeLabels.get(bookType)}
               </ListboxButton>
-              <ListboxOptions className="absolute inset-x-0 top-0 border text-sm rounded-lg block overflow-clip w-full bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+              <ListboxOptions
+                anchor="bottom start"
+                className="z-50 [--anchor-gap:4px] border text-sm rounded-lg block overflow-clip w-[var(--button-width)] bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+              >
                 {[...bookTypeLabels.entries()].map(([bookType, label]) => (
                   <ListboxOption
                     value={bookType}
@@ -530,7 +533,10 @@ export default function App() {
               <ListboxButton className="border text-sm rounded-lg block w-full text-left p-2.5 bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
                 {scalingModeLabels.get(scalingMode)}
               </ListboxButton>
-              <ListboxOptions className="absolute inset-x-0 top-0 border text-sm rounded-lg block overflow-clip w-full bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+              <ListboxOptions
+                anchor="bottom start"
+                className="z-50 [--anchor-gap:4px] border text-sm rounded-lg block overflow-clip w-[var(--button-width)] bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+              >
                 {[...scalingModeLabels.entries()].map(
                   ([scalingMode, label]) => (
                     <ListboxOption
@@ -572,7 +578,10 @@ export default function App() {
                 <ListboxButton className="shrink-0 inline-flex items-center py-2.5 px-4 text-sm font-medium text-center text-gray-900 bg-gray-100 border border-gray-300 rounded-e-lg hover:bg-gray-200 focus:ring-4 focus:outline-none focus:ring-gray-100 dark:bg-gray-700 dark:hover:bg-gray-600 dark:focus:ring-gray-700 dark:text-white dark:border-gray-600">
                   {unitLabels.get(unit)}
                 </ListboxButton>
-                <ListboxOptions className="absolute inset-x-0 top-0 border text-sm rounded-r-lg block overflow-clip w-full bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500">
+                <ListboxOptions
+                  anchor="bottom end"
+                  className="z-50 [--anchor-gap:4px] border text-sm rounded-lg block overflow-clip w-[var(--button-width)] bg-gray-700 border-gray-600 placeholder-gray-400 text-white focus:ring-blue-500 focus:border-blue-500"
+                >
                   {[...unitLabels.entries()].map(([unit, label]) => (
                     <ListboxOption
                       value={unit}
