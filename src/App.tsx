@@ -140,6 +140,9 @@ export default function App() {
 
   const [fileName, setFileName] = useState("Untitled");
   const [copied, setCopied] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
+  const copiedTimeoutRef = useRef<number | null>(null);
+  const downloadedTimeoutRef = useRef<number | null>(null);
 
   // Mirrors the same "watchKey" the 3D view resets its shadow-settle timer
   // on, so the Download/Copy buttons go gray at the exact moment the view
@@ -244,8 +247,23 @@ export default function App() {
   const triggerDownload = useCallback(async () => {
     if (isRendering) return;
     const canvas: HTMLCanvasElement | null = document.querySelector("canvas");
-    if (canvas !== null)
+    if (canvas !== null) {
       FileSaver.saveAs(await canvasToBlob(canvas), `${fileName}.png`);
+      // Reset first (in case a pulse from a previous click is still playing)
+      // so re-adding the attribute a frame later reliably restarts the
+      // CSS animation even on rapid repeat clicks.
+      if (downloadedTimeoutRef.current !== null) {
+        window.clearTimeout(downloadedTimeoutRef.current);
+        setDownloaded(false);
+      }
+      requestAnimationFrame(() => {
+        setDownloaded(true);
+        downloadedTimeoutRef.current = window.setTimeout(() => {
+          setDownloaded(false);
+          downloadedTimeoutRef.current = null;
+        }, 1000);
+      });
+    }
   }, [fileName, isRendering]);
 
   const triggerCopy = useCallback(async () => {
@@ -258,7 +276,17 @@ export default function App() {
             "image/png": canvasToBlob(canvas),
           }),
         ]);
-        setCopied(true);
+        if (copiedTimeoutRef.current !== null) {
+          window.clearTimeout(copiedTimeoutRef.current);
+          setCopied(false);
+        }
+        requestAnimationFrame(() => {
+          setCopied(true);
+          copiedTimeoutRef.current = window.setTimeout(() => {
+            setCopied(false);
+            copiedTimeoutRef.current = null;
+          }, 1000);
+        });
       } catch (error) {
         console.error(error);
       }
@@ -336,13 +364,14 @@ export default function App() {
       tabIndex={0}
       className="flex items-center justify-center w-full h-screen p-8 pb-20"
     >
+      <Button
+        onClick={() => setMode("batch")}
+        className="fixed left-4 top-4 z-30 text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
+      >
+        Batch Mode
+      </Button>
       <section className="fixed right-4 top-4 flex flex-col items-stetch space-y-4 bg-gray-900 p-4 rounded-xl w-80">
-        <Button
-          onClick={() => setMode("batch")}
-          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800 w-full"
-        >
-          Batch Mode
-        </Button>
+        <div className="text-lg font-bold text-white">Single Mode</div>
         <Field>
           <Label className="block mb-2 text-sm font-medium text-white">
             Book Type
@@ -561,7 +590,8 @@ export default function App() {
         <Button
           onClick={triggerDownload}
           disabled={isRendering}
-          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600"
+          data-downloaded={downloaded ? true : undefined}
+          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600 data-[downloaded=true]:animate-pulse-green"
         >
           {isRendering ? "Generating…" : "Download Image"}
         </Button>
@@ -569,7 +599,7 @@ export default function App() {
           onClick={triggerCopy}
           disabled={isRendering}
           data-copied={copied ? true : undefined}
-          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full data-[copied=true]:bg-green-600 transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600"
+          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full transition-colors duration-500 disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed disabled:hover:bg-gray-600 data-[copied=true]:animate-pulse-green"
         >
           Copy Image
         </Button>

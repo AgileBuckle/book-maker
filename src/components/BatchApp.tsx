@@ -515,6 +515,8 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     fileName: string;
     message: string;
   } | null>(null);
+  const [justFinished, setJustFinished] = useState(false);
+  const justFinishedTimeoutRef = useRef<number | null>(null);
   const resultsRef = useRef<BatchResultEntry[]>([]);
   const usedNamesRef = useRef<Set<string>>(new Set());
   const previewRef = useRef<HTMLDivElement>(null);
@@ -592,10 +594,20 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     setCurrentIndex(0);
     setStatusText(`Loading 1 of ${readyRows.length}…`);
     setIsProcessing(true);
+    if (justFinishedTimeoutRef.current !== null) {
+      window.clearTimeout(justFinishedTimeoutRef.current);
+      justFinishedTimeoutRef.current = null;
+    }
+    setJustFinished(false);
   };
 
   const handleCancel = () => {
     setIsProcessing(false);
+    if (justFinishedTimeoutRef.current !== null) {
+      window.clearTimeout(justFinishedTimeoutRef.current);
+      justFinishedTimeoutRef.current = null;
+    }
+    setJustFinished(false);
     resultsRef.current = [];
     setStatusText("");
     setCurrentUrls(null);
@@ -641,6 +653,14 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         imageCount === 1 ? "" : "s"
       } (plus a reusable spine-type CSV) as book-maker-batch.zip.`,
     );
+    if (justFinishedTimeoutRef.current !== null) {
+      window.clearTimeout(justFinishedTimeoutRef.current);
+    }
+    setJustFinished(true);
+    justFinishedTimeoutRef.current = window.setTimeout(() => {
+      setJustFinished(false);
+      justFinishedTimeoutRef.current = null;
+    }, 1000);
   }, [readyRows]);
 
   const handleSettled = useCallback(() => {
@@ -695,14 +715,12 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
 
   return (
     <div className="flex items-center justify-center w-full h-screen overflow-hidden p-8 pb-20">
-      <section className="fixed left-4 top-4 flex flex-col items-stretch space-y-2 bg-gray-900 p-4 rounded-xl z-30">
-        <Button
-          onClick={onExit}
-          className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
-        >
-          {"‹"} Back to single image
-        </Button>
-      </section>
+      <Button
+        onClick={onExit}
+        className="fixed left-4 top-4 z-30 text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
+      >
+        {"‹"} Back to single image
+      </Button>
       <section className="fixed right-4 top-4 flex flex-col items-stretch space-y-4 bg-gray-900 p-4 rounded-xl w-80 max-h-[92vh] overflow-y-auto z-30">
         <div className="text-lg font-bold text-white">Batch Mode</div>
         <Field>
@@ -823,7 +841,8 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           <Button
             onClick={handleStart}
             disabled={readyRows.length === 0}
-            className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full disabled:opacity-40 disabled:cursor-not-allowed"
+            data-finished={justFinished ? true : undefined}
+            className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-blue-800 w-full disabled:opacity-40 disabled:cursor-not-allowed data-[finished=true]:animate-pulse-green"
           >
             Start Batch ({readyRows.length})
           </Button>
