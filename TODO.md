@@ -11,5 +11,5 @@
 - [x] Gray out buttons until fully generated
 - [x] Fix scaling colliding with book type selector in batch mode
 - [x] Make design consistent between the two.
-- [ ] Make the scrollbars match the asthetic.
+- [x] Make the scrollbars match the asthetic.
 - [ ] Make the custom color picker in batch match the one used for single.

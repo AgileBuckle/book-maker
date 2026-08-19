@@ -721,7 +721,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       >
         {"‹"} Back to single image
       </Button>
-      <section className="fixed right-4 top-4 flex flex-col items-stretch space-y-4 bg-gray-900 p-4 rounded-xl w-80 max-h-[92vh] overflow-y-auto z-30">
+      <section className="themed-scrollbar fixed right-4 top-4 flex flex-col items-stretch space-y-4 bg-gray-900 p-4 rounded-xl w-80 max-h-[92vh] overflow-y-auto z-30">
         <div className="text-lg font-bold text-white">Batch Mode</div>
         <Field>
           <Label className="block mb-2 text-sm font-medium text-white">
@@ -876,7 +876,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         ) : null}
       </section>
 
-      <main className="flex flex-col gap-6 items-center w-full max-w-6xl h-full overflow-y-auto">
+      <main className="themed-scrollbar flex flex-col gap-6 items-center w-full max-w-6xl h-full overflow-y-auto">
         {batchError ? (
           <div className="w-full shrink-0 bg-red-950 border border-red-700 rounded-xl p-4 text-red-100">
             <div className="flex items-start justify-between gap-4">
@@ -1060,7 +1060,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   </div>
                   {covers.length > 0 ? (
                     <>
-                      <ul className="mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
+                      <ul className="themed-scrollbar mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
                         {covers.map((c) => (
                           <li
                             key={c.id}
@@ -1123,7 +1123,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                     </div>
                     {spines.length > 0 ? (
                       <>
-                        <ul className="mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
+                        <ul className="themed-scrollbar mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
                           {spines.map((s) => (
                             <li
                               key={s.id}
@@ -1168,7 +1168,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                     </div>
                   ) : null}
                 </div>
-                <div className="max-h-64 overflow-y-auto space-y-1">
+                <div className="themed-scrollbar max-h-64 overflow-y-auto space-y-1">
                   {rows.map((row) => (
                     <div
                       key={row.cover.id}

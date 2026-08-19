@@ -5,3 +5,40 @@
 .react-colorful {
   width: auto;
 }
+
+/* Custom scrollbars for the app's scrollable lists, styled to match the
+   dark UI instead of the browser's default scrollbar.
+
+   Chromium 121+ (Chrome, Brave, Edge, etc.) prioritizes the standard
+   scrollbar-width/scrollbar-color properties over the legacy
+   ::-webkit-scrollbar-* pseudo-elements when both are set on the same
+   element — so scrollbar-width: thin would silently force its built-in
+   "thin" preset width, ignoring our custom pixel width below. Scoping the
+   standard properties to only apply where ::-webkit-scrollbar isn't
+   supported (i.e. Firefox) keeps our custom width intact everywhere else. */
+@supports not selector(::-webkit-scrollbar) {
+  .themed-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #4b5563 transparent; /* gray-600 thumb, transparent track */
+  }
+}
+
+.themed-scrollbar::-webkit-scrollbar {
+  width: 15px;
+  height: 15px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #4b5563; /* gray-600 */
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #6b7280; /* gray-500 */
+}
