@@ -512,6 +512,30 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       ),
     [rows],
   );
+
+  // Display-only alphabetical ordering for the covers/spines lists and the
+  // per-row spine picker. `covers`/`spines` themselves stay in upload order
+  // since that order also feeds the auto-matching logic above.
+  const sortedCovers = useMemo(
+    () =>
+      [...covers].sort((a, b) =>
+        a.file.name.localeCompare(b.file.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      ),
+    [covers],
+  );
+  const sortedSpines = useMemo(
+    () =>
+      [...spines].sort((a, b) =>
+        a.file.name.localeCompare(b.file.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      ),
+    [spines],
+  );
   const skippedCount = rows.length - readyRows.length;
 
   const [isProcessing, setIsProcessing] = useState(false);
@@ -755,7 +779,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   <ListboxOption
                     value={type}
                     key={type}
-                    className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                    className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                   >
                     {label}
                   </ListboxOption>
@@ -805,7 +829,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   <ListboxOption
                     value={modeOption}
                     key={modeOption}
-                    className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                    className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                   >
                     {label}
                   </ListboxOption>
@@ -847,7 +871,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                     <ListboxOption
                       value={unitOption}
                       key={unitOption}
-                      className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                      className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                     >
                       {label}
                     </ListboxOption>
@@ -1072,7 +1096,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   {covers.length > 0 ? (
                     <>
                       <ul className="themed-scrollbar mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
-                        {covers.map((c) => (
+                        {sortedCovers.map((c) => (
                           <li
                             key={c.id}
                             className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
@@ -1135,7 +1159,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                     {spines.length > 0 ? (
                       <>
                         <ul className="themed-scrollbar mt-2 mx-3 max-h-40 overflow-y-auto text-sm text-gray-300 space-y-1">
-                          {spines.map((s) => (
+                          {sortedSpines.map((s) => (
                             <li
                               key={s.id}
                               className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
@@ -1213,15 +1237,15 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                               >
                                 <ListboxOption
                                   value={null}
-                                  className="px-2 py-1 truncate hover:bg-gray-800 cursor-pointer"
+                                  className="px-2 py-1 truncate hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                                 >
                                   {"— none —"}
                                 </ListboxOption>
-                                {spines.map((s) => (
+                                {sortedSpines.map((s) => (
                                   <ListboxOption
                                     value={s.id}
                                     key={s.id}
-                                    className="px-2 py-1 truncate hover:bg-gray-800 cursor-pointer"
+                                    className="px-2 py-1 truncate hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                                   >
                                     {s.file.name}
                                   </ListboxOption>
@@ -1272,7 +1296,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                                 <ListboxOption
                                   value={type}
                                   key={type}
-                                  className="px-2 py-1 hover:bg-gray-800 cursor-pointer"
+                                  className="px-2 py-1 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                                 >
                                   {label}
                                 </ListboxOption>

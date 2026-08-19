@@ -389,7 +389,7 @@ export default function App() {
                   <ListboxOption
                     value={bookType}
                     key={bookType}
-                    className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                    className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                   >
                     {label}
                   </ListboxOption>
@@ -542,7 +542,7 @@ export default function App() {
                     <ListboxOption
                       value={scalingMode}
                       key={scalingMode}
-                      className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                      className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                     >
                       {label}
                     </ListboxOption>
@@ -586,7 +586,7 @@ export default function App() {
                     <ListboxOption
                       value={unit}
                       key={unit}
-                      className="p-2.5 hover:bg-gray-800 cursor-pointer"
+                      className="p-2.5 hover:bg-gray-800 data-[active]:bg-gray-800 cursor-pointer"
                     >
                       {label}
                     </ListboxOption>
