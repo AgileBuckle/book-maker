@@ -47,6 +47,7 @@ import {
   loadImageUrl,
   releaseImageUrl,
 } from "../utils/imageLoader";
+import { applyDropShadowAndTrim } from "../utils/postProcess";
 
 /* Duplicated from App.tsx on purpose: batch mode is kept fully independent
  * so nothing here can change how the existing single-image flow behaves. */
@@ -865,7 +866,8 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     if (canvas === null) return;
 
     const row = currentRow;
-    canvasToBlob(canvas)
+    const output = applyDropShadowAndTrim(canvas);
+    canvasToBlob(output)
       .then((blob) => {
         const baseName = pathParse(row.cover.file.name).name;
         let outputName = `${baseName}.png`;

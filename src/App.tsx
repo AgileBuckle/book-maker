@@ -13,6 +13,7 @@ import {
 } from "react";
 import { HexColorPicker } from "react-colorful";
 import { detectBackCoverColor } from "./utils/backColor";
+import { applyDropShadowAndTrim } from "./utils/postProcess";
 import {
   Button,
   Field,
@@ -248,7 +249,8 @@ export default function App() {
     if (isRendering) return;
     const canvas: HTMLCanvasElement | null = document.querySelector("canvas");
     if (canvas !== null) {
-      FileSaver.saveAs(await canvasToBlob(canvas), `${fileName}.png`);
+      const output = applyDropShadowAndTrim(canvas);
+      FileSaver.saveAs(await canvasToBlob(output), `${fileName}.png`);
       // Reset first (in case a pulse from a previous click is still playing)
       // so re-adding the attribute a frame later reliably restarts the
       // CSS animation even on rapid repeat clicks.
@@ -271,9 +273,10 @@ export default function App() {
     const canvas: HTMLCanvasElement | null = document.querySelector("canvas");
     if (canvas !== null) {
       try {
+        const output = applyDropShadowAndTrim(canvas);
         await navigator.clipboard.write([
           new ClipboardItem({
-            "image/png": canvasToBlob(canvas),
+            "image/png": canvasToBlob(output),
           }),
         ]);
         if (copiedTimeoutRef.current !== null) {
