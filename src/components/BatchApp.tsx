@@ -42,6 +42,7 @@ import { createZipBlob } from "../utils/zip";
 import { detectBackCoverColor } from "../utils/backColor";
 import {
   ImageLoadError,
+  detectColorModeWarning,
   detectFileKind,
   loadImageUrl,
   releaseImageUrl,
@@ -155,6 +156,13 @@ interface BatchFailure {
   message: string;
 }
 
+// One ready row whose cover and/or assigned spine was flagged as CMYK or
+// 16-bit by detectColorModeWarning — see rowColorWarnings.
+interface RowColorWarning {
+  fileName: string;
+  messages: string[];
+}
+
 export default function BatchApp({ onExit }: { onExit: () => void }) {
   const coverInputRef = useRef<HTMLInputElement>(null);
   const spineInputRef = useRef<HTMLInputElement>(null);
@@ -176,6 +184,16 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   // (or a fresh one) re-applies matches on top of whatever's there.
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [csvWarning, setCsvWarning] = useState<string | null>(null);
+
+  // CMYK/16-bit warnings for uploaded covers and spines, keyed by NamedFile
+  // id (covers and spines share the same id namespace, so one map covers
+  // both). Populated in the background as files are dropped in — see the
+  // detection effect below — and surfaced two ways: an inline icon next to
+  // the file in the Covers/Spines lists, and a confirmation popup if any
+  // ready row is affected when Start Batch is clicked.
+  const [colorWarnings, setColorWarnings] = useState<Record<string, string>>(
+    {},
+  );
 
   const [bookType, setBookType] = useState<BookType>(BookType.PerfectBound);
   const [scalingMode, setScalingMode] = useState<ScalingMode>(
@@ -442,25 +460,62 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     }
   }, [csvFileRejections]);
 
+  const clearColorWarning = (id: string) => {
+    colorCheckedRef.current.delete(id);
+    setColorWarnings((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+
   const removeCover = (coverId: string) => {
     setCovers((prev) => prev.filter((c) => c.id !== coverId));
     releaseImageUrl(coverId);
+    clearColorWarning(coverId);
   };
 
   const removeSpine = (spineId: string) => {
     setSpines((prev) => prev.filter((s) => s.id !== spineId));
     releaseImageUrl(spineId);
+    clearColorWarning(spineId);
   };
 
   const clearAllCovers = () => {
-    covers.forEach((c) => releaseImageUrl(c.id));
+    covers.forEach((c) => {
+      releaseImageUrl(c.id);
+      clearColorWarning(c.id);
+    });
     setCovers([]);
   };
 
   const clearAllSpines = () => {
-    spines.forEach((s) => releaseImageUrl(s.id));
+    spines.forEach((s) => {
+      releaseImageUrl(s.id);
+      clearColorWarning(s.id);
+    });
     setSpines([]);
   };
+
+  // Checks every newly-added cover/spine for CMYK or 16-bit color in the
+  // background, without blocking on it. Tracks which file ids have already
+  // been checked so a file is never inspected twice, and only stores an
+  // entry in colorWarnings when there's actually something to flag.
+  const colorCheckedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pending = [...covers, ...spines].filter(
+      (namedFile) => !colorCheckedRef.current.has(namedFile.id),
+    );
+    pending.forEach((namedFile) => {
+      colorCheckedRef.current.add(namedFile.id);
+      detectColorModeWarning(namedFile.file).then((warning) => {
+        if (warning) {
+          setColorWarnings((prev) => ({ ...prev, [namedFile.id]: warning }));
+        }
+      });
+    });
+  }, [covers, spines]);
 
   // Auto-detect the back cover color for any hardcover row that doesn't
   // have one yet (and hasn't been manually overridden). Tracks in-flight
@@ -520,6 +575,26 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       ),
     [rows],
   );
+
+  // Ready rows whose cover and/or assigned spine came back CMYK or 16-bit.
+  // These still count as "ready" (a color problem doesn't block generation)
+  // but drive the confirmation popup shown from Start Batch.
+  const rowColorWarnings = useMemo<RowColorWarning[]>(() => {
+    const warnings: RowColorWarning[] = [];
+    for (const row of readyRows) {
+      const messages: string[] = [];
+      const coverWarning = colorWarnings[row.cover.id];
+      if (coverWarning) messages.push(coverWarning);
+      if (row.spineId) {
+        const spineWarning = colorWarnings[row.spineId];
+        if (spineWarning) messages.push(spineWarning);
+      }
+      if (messages.length > 0) {
+        warnings.push({ fileName: row.cover.file.name, messages });
+      }
+    }
+    return warnings;
+  }, [readyRows, colorWarnings]);
 
   // Display-only alphabetical ordering for the covers/spines lists and the
   // per-row spine picker. `covers`/`spines` themselves stay in upload order
@@ -656,8 +731,11 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isProcessing, currentIndex, readyRows, spines]);
 
-  const handleStart = () => {
-    if (readyRows.length === 0) return;
+  // Shown instead of starting immediately when any ready row has a CMYK or
+  // 16-bit warning — see rowColorWarnings and handleStart.
+  const [showColorWarningConfirm, setShowColorWarningConfirm] = useState(false);
+
+  const beginProcessing = () => {
     resultsRef.current = [];
     failuresRef.current = [];
     usedNamesRef.current = new Set();
@@ -672,6 +750,18 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       justFinishedTimeoutRef.current = null;
     }
     setJustFinished(false);
+  };
+
+  const handleStart = () => {
+    if (readyRows.length === 0) return;
+    // A CMYK/16-bit file usually won't fail outright — it'll just render
+    // with wrong colors — so this warns and asks for confirmation rather
+    // than blocking Start Batch outright.
+    if (rowColorWarnings.length > 0) {
+      setShowColorWarningConfirm(true);
+      return;
+    }
+    beginProcessing();
   };
 
   const handleCancel = () => {
@@ -1148,12 +1238,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                         {sortedCovers.map((c) => (
                           <li
                             key={c.id}
-                            className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
+                            className="flex items-center justify-between gap-2 bg-gray-800 rounded px-2 py-1"
                           >
-                            <span className="truncate">{c.file.name}</span>
+                            <span className="truncate flex-1 min-w-0">
+                              {c.file.name}
+                            </span>
+                            {colorWarnings[c.id] ? (
+                              <span title={colorWarnings[c.id]}>
+                                <ExclamationTriangleIcon className="size-4 shrink-0 text-yellow-400" />
+                              </span>
+                            ) : null}
                             <button
                               onClick={() => removeCover(c.id)}
-                              className="text-gray-400 hover:text-red-400 ml-2"
+                              className="text-gray-400 hover:text-red-400 ml-2 shrink-0"
                               aria-label={`Remove ${c.file.name}`}
                             >
                               <TrashIcon className="size-4" />
@@ -1211,12 +1308,19 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                           {sortedSpines.map((s) => (
                             <li
                               key={s.id}
-                              className="flex items-center justify-between bg-gray-800 rounded px-2 py-1"
+                              className="flex items-center justify-between gap-2 bg-gray-800 rounded px-2 py-1"
                             >
-                              <span className="truncate">{s.file.name}</span>
+                              <span className="truncate flex-1 min-w-0">
+                                {s.file.name}
+                              </span>
+                              {colorWarnings[s.id] ? (
+                                <span title={colorWarnings[s.id]}>
+                                  <ExclamationTriangleIcon className="size-4 shrink-0 text-yellow-400" />
+                                </span>
+                              ) : null}
                               <button
                                 onClick={() => removeSpine(s.id)}
-                                className="text-gray-400 hover:text-red-400 ml-2"
+                                className="text-gray-400 hover:text-red-400 ml-2 shrink-0"
                                 aria-label={`Remove ${s.file.name}`}
                               >
                                 <TrashIcon className="size-4" />
@@ -1467,6 +1571,70 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                 className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
               >
                 Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showColorWarningConfirm ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+          <div className="themed-scrollbar w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border border-yellow-700 bg-gray-900 p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="font-bold text-white">
+                {rowColorWarnings.length} book
+                {rowColorWarnings.length === 1 ? "" : "s"} may render with the
+                wrong colors
+              </div>
+              <button
+                onClick={() => setShowColorWarningConfirm(false)}
+                className="text-gray-400 hover:text-white shrink-0"
+                aria-label="Close"
+              >
+                <XMarkIcon className="size-5" />
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-gray-300">
+              These files are CMYK or 16-bit — this app expects 8-bit RGB.
+              Depending on the file, that means wrong colors or a failure to
+              open it at all (a 16-bit PSD can't be read at all and will show up
+              as a failure after the batch finishes). You can generate anyway or
+              go back and swap in corrected files first.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {rowColorWarnings.map((warning, index) => (
+                <li
+                  key={`${warning.fileName}-${index}`}
+                  className="rounded-lg border border-yellow-800 bg-yellow-950 p-3"
+                >
+                  <div className="truncate font-medium text-yellow-100">
+                    {warning.fileName}
+                  </div>
+                  {warning.messages.map((message, messageIndex) => (
+                    <div
+                      key={messageIndex}
+                      className="mt-1 text-sm text-yellow-200"
+                    >
+                      {message}
+                    </div>
+                  ))}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                onClick={() => setShowColorWarningConfirm(false)}
+                className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
+              >
+                Go back
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowColorWarningConfirm(false);
+                  beginProcessing();
+                }}
+                className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-yellow-700 hover:bg-yellow-600 focus:outline-none focus:ring-yellow-800"
+              >
+                Generate anyway
               </Button>
             </div>
           </div>

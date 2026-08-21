@@ -1,4 +1,4 @@
-import Psd from "@webtoon/psd";
+import Psd, { ColorMode, Depth } from "@webtoon/psd";
 import { NamedFile } from "./fuzzyMatch";
 
 /**
@@ -129,4 +129,82 @@ export function releaseImageUrl(id: string): void {
     URL.revokeObjectURL(url);
     urlCache.delete(id);
   }
+}
+
+/**
+ * Best-effort check for a color mode this app doesn't render correctly:
+ * CMYK, or any color channel wider than 8 bits (16-bit). Both come out
+ * wrong (or fail outright) once actually composited/rendered, so this lets
+ * a batch flag the file before generation rather than after. Only reads a
+ * small header up front (PNG's IHDR chunk, or a PSD parse without the
+ * expensive `composite()` step) — nothing is fully decoded here.
+ *
+ * Returns null when the file looks fine, or when it can't be inspected
+ * this way at all (an unrecognized/corrupt file still gets a proper error
+ * from `loadImageUrl` when it's actually opened) — this never throws.
+ */
+export async function detectColorModeWarning(
+  file: File,
+): Promise<string | null> {
+  try {
+    const kind = detectFileKind(file);
+    if (kind === "png") return await detectPngColorWarning(file);
+    if (kind === "psd") return await detectPsdColorWarning(file);
+  } catch (error) {
+    console.error(`Color mode check failed for "${file.name}":`, error);
+  }
+  return null;
+}
+
+async function detectPngColorWarning(file: File): Promise<string | null> {
+  // Only the fixed-size signature + IHDR chunk header is needed (29 bytes),
+  // so this reads a handful of bytes rather than the whole file.
+  const header = new DataView(await file.slice(0, 33).arrayBuffer());
+  const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
+    if (header.getUint8(i) !== PNG_SIGNATURE[i]) return null;
+  }
+  // Bytes 12-15 should read "IHDR" for a standard PNG layout; bail out
+  // rather than guess if they don't.
+  const chunkType = String.fromCharCode(
+    header.getUint8(12),
+    header.getUint8(13),
+    header.getUint8(14),
+    header.getUint8(15),
+  );
+  if (chunkType !== "IHDR") return null;
+  const bitDepth = header.getUint8(24);
+  // PNG has no CMYK variant, so bit depth is the only thing to check here.
+  if (bitDepth === 16) {
+    return `"${file.name}" is a 16-bit PNG. This app expects 8-bit color, so it may render with incorrect colors — consider converting it to 8-bit first.`;
+  }
+  return null;
+}
+
+async function detectPsdColorWarning(file: File): Promise<string | null> {
+  let psdFile: Psd;
+  try {
+    psdFile = Psd.parse(await file.arrayBuffer());
+  } catch (error) {
+    // @webtoon/psd can't even parse a 16-bit (or higher) PSD — it throws
+    // "Unsupported image bit depth: N" immediately, before colorMode/depth
+    // are ever readable. That throw IS the signal to warn about here;
+    // otherwise it would just bubble up to the try/catch in
+    // detectColorModeWarning, which logs it and swallows it as "can't be
+    // inspected" — silently skipping the warning entirely for exactly the
+    // 16-bit files this check exists to catch.
+    const message = error instanceof Error ? error.message : String(error);
+    const bitDepthMatch = /unsupported image bit depth:\s*(\d+)/i.exec(message);
+    if (bitDepthMatch) {
+      return `"${file.name}" is a ${bitDepthMatch[1]}-bit PSD. This app's PSD parser can only read 8-bit files, so it will fail to open during generation — convert it to 8-bit in Photoshop first (Image > Mode > 8 Bits/Channel).`;
+    }
+    throw error;
+  }
+  const issues: string[] = [];
+  if (psdFile.colorMode === ColorMode.Cmyk) issues.push("CMYK color mode");
+  // Kept as a fallback in case a future library version parses a 16-bit
+  // file instead of throwing (unreachable today — see the catch above).
+  if (psdFile.depth === Depth.Sixteen) issues.push("16-bit color");
+  if (issues.length === 0) return null;
+  return `"${file.name}" uses ${issues.join(" and ")}. This app expects 8-bit RGB, so it may render with incorrect colors — consider converting it in Photoshop first (Image > Mode).`;
 }

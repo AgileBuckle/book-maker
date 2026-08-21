@@ -6,7 +6,7 @@
 - [x] Export csv with pngs about what was done and reuploadable to rerun. Stores just cover name and other configuration options.
 - [x] Gracefully handle errors (e.g. when it fails give an error and why and how to fix)
 - [x] When it fails, don't stop generation. Continue going and throw an error with the failed ones at the end.
-- [ ] Autodetect color mode problems and warn before it starts
+- [x] Autodetect color mode problems and warn before it starts
 - [ ] Trimming and drop-shadowing that's currently done in Photoshop could be integrated.
 - [ ] Remove spiral option from batch mode
 - [ ] Any parameter that can be set in single mode.
