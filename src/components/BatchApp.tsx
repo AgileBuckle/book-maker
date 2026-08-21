@@ -50,10 +50,10 @@ import {
 /* Duplicated from App.tsx on purpose: batch mode is kept fully independent
  * so nothing here can change how the existing single-image flow behaves. */
 async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob !== null) resolve(blob);
-      else throw new Error("Canvas failed blob conversion");
+      else reject(new Error("Canvas failed blob conversion"));
     }, "image/png");
   });
 }
@@ -145,6 +145,14 @@ interface BatchRow {
 interface BatchResultEntry {
   name: string;
   blob: Blob;
+}
+
+// One book that couldn't be generated during a batch run — collected as the
+// batch goes so a failure doesn't stop the rest, then shown together in a
+// summary popup once the batch finishes.
+interface BatchFailure {
+  fileName: string;
+  message: string;
 }
 
 export default function BatchApp({ onExit }: { onExit: () => void }) {
@@ -546,13 +554,17 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     cover: string;
     spine: string;
   } | null>(null);
-  const [batchError, setBatchError] = useState<{
-    fileName: string;
-    message: string;
-  } | null>(null);
   const [justFinished, setJustFinished] = useState(false);
   const justFinishedTimeoutRef = useRef<number | null>(null);
   const resultsRef = useRef<BatchResultEntry[]>([]);
+  // Books that failed to load or render during the run just gone by, kept
+  // off to the side so the rest of the batch can keep going instead of
+  // stopping on the first problem. Surfaced all at once via failureSummary
+  // once the batch finishes (or runs out of rows to try).
+  const failuresRef = useRef<BatchFailure[]>([]);
+  const [failureSummary, setFailureSummary] = useState<BatchFailure[] | null>(
+    null,
+  );
   const usedNamesRef = useRef<Set<string>>(new Set());
   const previewRef = useRef<HTMLDivElement>(null);
   // Id of the cover currently held open in memory for the in-progress row,
@@ -607,24 +619,50 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           error instanceof Error
             ? error.message
             : "Something went wrong loading this image.";
-        setBatchError({ fileName, message });
-        setIsProcessing(false);
+        console.error("Failed to load image for batch row:", error);
+        failuresRef.current.push({ fileName, message });
+        // Whatever of this row's images did open, close it back out again —
+        // releaseImageUrl is a no-op for anything that never loaded — so a
+        // partial failure (e.g. cover opened fine but the spine didn't)
+        // can't leak memory across a long batch.
+        releaseImageUrl(row.cover.id);
+        if (row.spineId) releaseImageUrl(row.spineId);
+        setCurrentUrls(null);
         setIsLoadingCurrent(false);
-        setStatusText("");
+
+        // Skip this row rather than stopping the whole batch: move on to
+        // the next one, or wrap up if this was the last row to try.
+        const nextIndex = currentIndex + 1;
+        if (nextIndex < readyRows.length) {
+          setStatusText(`Generating ${nextIndex + 1} of ${readyRows.length}…`);
+          setCurrentIndex(nextIndex);
+        } else {
+          setStatusText(
+            `Finishing up — zipping ${resultsRef.current.length} image${
+              resultsRef.current.length === 1 ? "" : "s"
+            }…`,
+          );
+          finishBatch();
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
+    // finishBatch (defined below via useCallback) is intentionally omitted:
+    // it's stable per readyRows, which is already a dependency here, and is
+    // only invoked asynchronously after this render has committed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isProcessing, currentIndex, readyRows, spines]);
 
   const handleStart = () => {
     if (readyRows.length === 0) return;
     resultsRef.current = [];
+    failuresRef.current = [];
     usedNamesRef.current = new Set();
     loadedCoverIdRef.current = null;
-    setBatchError(null);
+    setFailureSummary(null);
     setCurrentUrls(null);
     setCurrentIndex(0);
     setStatusText(`Loading 1 of ${readyRows.length}…`);
@@ -644,6 +682,7 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     }
     setJustFinished(false);
     resultsRef.current = [];
+    failuresRef.current = [];
     setStatusText("");
     setCurrentUrls(null);
     setIsLoadingCurrent(false);
@@ -676,18 +715,32 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       data: new TextEncoder().encode(csvText),
     });
     const zipBlob = await createZipBlob(entries);
-    FileSaver.saveAs(zipBlob, "book-maker-batch.zip");
+    // Only offer a zip once there's at least one image in it — an all-failed
+    // batch would otherwise download a zip containing nothing but the CSV.
+    if (imageCount > 0) {
+      FileSaver.saveAs(zipBlob, "book-maker-batch.zip");
+    }
     if (loadedCoverIdRef.current) {
       releaseImageUrl(loadedCoverIdRef.current);
       loadedCoverIdRef.current = null;
     }
     setIsProcessing(false);
     setCurrentUrls(null);
+    const failures = failuresRef.current;
     setStatusText(
-      `Done — downloaded ${imageCount} image${
-        imageCount === 1 ? "" : "s"
-      } (plus a reusable spine-type CSV) as book-maker-batch.zip.`,
+      imageCount > 0
+        ? `Done — downloaded ${imageCount} image${
+            imageCount === 1 ? "" : "s"
+          } (plus a reusable spine-type CSV) as book-maker-batch.zip.${
+            failures.length > 0
+              ? ` ${failures.length} book${failures.length === 1 ? "" : "s"} couldn't be generated — see the popup for details.`
+              : ""
+          }`
+        : `No books could be generated. See the popup for details.`,
     );
+    if (failures.length > 0) {
+      setFailureSummary(failures);
+    }
     if (justFinishedTimeoutRef.current !== null) {
       window.clearTimeout(justFinishedTimeoutRef.current);
     }
@@ -704,26 +757,43 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       previewRef.current?.querySelector("canvas") ?? null;
     if (canvas === null) return;
 
-    canvasToBlob(canvas).then((blob) => {
-      const baseName = pathParse(currentRow.cover.file.name).name;
-      let outputName = `${baseName}.png`;
-      let suffix = 2;
-      while (usedNamesRef.current.has(outputName)) {
-        outputName = `${baseName} (${suffix}).png`;
-        suffix += 1;
-      }
-      usedNamesRef.current.add(outputName);
-      resultsRef.current.push({ name: outputName, blob });
-
-      const nextIndex = currentIndex + 1;
-      if (nextIndex < readyRows.length) {
-        setStatusText(`Generating ${nextIndex + 1} of ${readyRows.length}…`);
-        setCurrentIndex(nextIndex);
-      } else {
-        setStatusText(`Finishing up — zipping ${readyRows.length} images…`);
-        finishBatch();
-      }
-    });
+    const row = currentRow;
+    canvasToBlob(canvas)
+      .then((blob) => {
+        const baseName = pathParse(row.cover.file.name).name;
+        let outputName = `${baseName}.png`;
+        let suffix = 2;
+        while (usedNamesRef.current.has(outputName)) {
+          outputName = `${baseName} (${suffix}).png`;
+          suffix += 1;
+        }
+        usedNamesRef.current.add(outputName);
+        resultsRef.current.push({ name: outputName, blob });
+      })
+      .catch((error) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Something went wrong generating this book.";
+        console.error("Failed to capture rendered book:", error);
+        failuresRef.current.push({ fileName: row.cover.file.name, message });
+      })
+      .finally(() => {
+        // Move on regardless of whether this row succeeded, so one bad
+        // render doesn't stall the rest of the batch.
+        const nextIndex = currentIndex + 1;
+        if (nextIndex < readyRows.length) {
+          setStatusText(`Generating ${nextIndex + 1} of ${readyRows.length}…`);
+          setCurrentIndex(nextIndex);
+        } else {
+          setStatusText(
+            `Finishing up — zipping ${resultsRef.current.length} image${
+              resultsRef.current.length === 1 ? "" : "s"
+            }…`,
+          );
+          finishBatch();
+        }
+      });
   }, [currentRow, currentIndex, readyRows.length, finishBatch]);
 
   const coverExists = covers.length > 0;
@@ -912,27 +982,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       </section>
 
       <main className="themed-scrollbar flex flex-col gap-6 items-center w-full max-w-6xl h-full overflow-y-auto">
-        {batchError ? (
-          <div className="w-full shrink-0 bg-red-950 border border-red-700 rounded-xl p-4 text-red-100">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="font-bold">
-                  Batch stopped — couldn't open "{batchError.fileName}"
-                </div>
-                <p className="text-sm mt-1 text-red-200">
-                  {batchError.message}
-                </p>
-              </div>
-              <button
-                onClick={() => setBatchError(null)}
-                className="text-red-300 hover:text-white shrink-0"
-                aria-label="Dismiss error"
-              >
-                <XMarkIcon className="size-5" />
-              </button>
-            </div>
-          </div>
-        ) : null}
         {dropError ? (
           <div className="w-full shrink-0 bg-yellow-950 border border-yellow-700 rounded-xl p-4 text-yellow-100">
             <div className="flex items-start justify-between gap-4">
@@ -1377,6 +1426,52 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
           </div>
         )}
       </main>
+      {failureSummary ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+          <div className="themed-scrollbar w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border border-red-700 bg-gray-900 p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="font-bold text-white">
+                {failureSummary.length} book
+                {failureSummary.length === 1 ? "" : "s"} couldn't be generated
+              </div>
+              <button
+                onClick={() => setFailureSummary(null)}
+                className="text-gray-400 hover:text-white shrink-0"
+                aria-label="Close"
+              >
+                <XMarkIcon className="size-5" />
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-gray-300">
+              The rest of the batch finished and downloaded normally. Fix these
+              and run them again separately:
+            </p>
+            <ul className="mt-3 space-y-2">
+              {failureSummary.map((failure, index) => (
+                <li
+                  key={`${failure.fileName}-${index}`}
+                  className="rounded-lg border border-red-800 bg-red-950 p-3"
+                >
+                  <div className="truncate font-medium text-red-100">
+                    {failure.fileName}
+                  </div>
+                  <div className="mt-1 text-sm text-red-200">
+                    {failure.message}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex justify-end">
+              <Button
+                onClick={() => setFailureSummary(null)}
+                className="text-white focus:ring-4 font-medium rounded-lg text-sm px-5 py-2.5 bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-gray-800"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
