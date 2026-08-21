@@ -1,8 +1,11 @@
 /**
  * Parses an optional batch-mode CSV (column A: book name, column B: spine
- * type) and matches it against the currently uploaded covers, using the same
- * fuzzy filename matching as cover/spine pairing (see fuzzyMatch.ts) for both
- * the book name and the spine type text.
+ * type, column C: hardcover back-cover color) and matches it against the
+ * currently uploaded covers, using the same fuzzy filename matching as
+ * cover/spine pairing (see fuzzyMatch.ts) for the book name and the spine
+ * type text. Column C only applies to hardcover rows and is optional — it's
+ * the one other per-book setting batch mode lets you override, alongside
+ * spine type (see the "Setting Book Types" section of the README).
  */
 
 import { BookType } from "../enums.ts";
@@ -54,18 +57,40 @@ function csvField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
+/** Validates a hex color string (3- or 6-digit, e.g. "#fff" or "#3d2b1a"),
+ * tolerating surrounding whitespace, and normalizes it to a lowercase
+ * 6-digit "#rrggbb" form. Returns null if the text isn't a valid hex color. */
+function normalizeHexColor(text: string): string | null {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text.trim());
+  if (match === null) return null;
+  const hex = match[1];
+  if (hex.length === 3) {
+    const [r, g, b] = hex;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return `#${hex.toLowerCase()}`;
+}
+
 /**
- * Builds a CSV in the same "Book Name,Spine Type" layout matchCsvToCovers
- * reads, so a finished batch's spine-type choices can be exported and later
- * re-uploaded to redo the batch without re-picking each book's type by hand.
+ * Builds a CSV in the same "Book Name,Spine Type,Hardcover Back Color"
+ * layout matchCsvToCovers reads, so a finished batch's per-book choices —
+ * spine type and (for hardcover books) back-cover color — can be exported
+ * and later re-uploaded to redo the batch without re-picking each one by
+ * hand.
  */
 export function buildSpineTypeCsv(
-  rows: { bookName: string; bookType: BookType }[],
+  rows: { bookName: string; bookType: BookType; backColor?: string | null }[],
 ): string {
-  const lines = ["Book Name,Spine Type"];
+  const lines = ["Book Name,Spine Type,Hardcover Back Color"];
   for (const row of rows) {
     const label = bookTypeExportLabels.get(row.bookType) ?? "";
-    lines.push(`${csvField(row.bookName)},${csvField(label)}`);
+    // Back color only applies to hardcover books; leave the column blank
+    // for every other spine type even if a stray value were passed in.
+    const color =
+      row.bookType === BookType.Hardcover ? (row.backColor ?? "") : "";
+    lines.push(
+      `${csvField(row.bookName)},${csvField(label)},${csvField(color)}`,
+    );
   }
   return lines.join("\r\n") + "\r\n";
 }
@@ -158,6 +183,9 @@ function matchBookTypeText(text: string): BookTypeMatch | null {
 export interface CsvSpineAssignment {
   coverId: string;
   bookType: BookType;
+  /** Hardcover back-cover color, if column C had one for this row. Only
+   * ever set when bookType is Hardcover. */
+  backColor?: string;
 }
 
 export interface CsvMatchResult {
@@ -169,10 +197,14 @@ export interface CsvMatchResult {
   /** `<book name>: "<raw text>"` for rows whose spine type text didn't
    * fuzzy-match any known spine type. */
   unrecognizedSpineTypes: string[];
+  /** `<book name>: "<raw text>"` for hardcover rows whose column C text
+   * wasn't blank but didn't parse as a hex color. */
+  invalidBackColors: string[];
 }
 
 /**
- * Matches CSV rows (book name, spine type) to uploaded covers.
+ * Matches CSV rows (book name, spine type, optional hardcover back color)
+ * to uploaded covers.
  *
  * Row 1 is auto-detected as a header and skipped if its column B doesn't
  * fuzzy-match any known spine type (e.g. "Spine Type" or "Type" won't match,
@@ -186,7 +218,8 @@ export function matchCsvToCovers(
   covers: NamedFile[],
 ): CsvMatchResult {
   const parsed = parseCsv(csvText).map(
-    (row) => [row[0] ?? "", row[1] ?? ""] as [string, string],
+    (row) =>
+      [row[0] ?? "", row[1] ?? "", row[2] ?? ""] as [string, string, string],
   );
   const allRows = parsed.filter(([bookName]) => bookName.length > 0);
 
@@ -222,10 +255,7 @@ export function matchCsvToCovers(
   const coverByRow = new Map<number, string>();
   for (const candidate of candidates) {
     if (candidate.score < MATCH_THRESHOLD) break;
-    if (
-      usedRows.has(candidate.rowIndex) ||
-      usedCovers.has(candidate.coverId)
-    ) {
+    if (usedRows.has(candidate.rowIndex) || usedCovers.has(candidate.coverId)) {
       continue;
     }
     usedRows.add(candidate.rowIndex);
@@ -236,8 +266,9 @@ export function matchCsvToCovers(
   const assignments: CsvSpineAssignment[] = [];
   const unmatchedBookNames: string[] = [];
   const unrecognizedSpineTypes: string[] = [];
+  const invalidBackColors: string[] = [];
 
-  dataRows.forEach(([bookName, spineTypeText], rowIndex) => {
+  dataRows.forEach(([bookName, spineTypeText, backColorText], rowIndex) => {
     const coverId = coverByRow.get(rowIndex);
     if (coverId === undefined) {
       unmatchedBookNames.push(bookName);
@@ -248,7 +279,19 @@ export function matchCsvToCovers(
       unrecognizedSpineTypes.push(`${bookName}: "${spineTypeText}"`);
       return;
     }
-    assignments.push({ coverId, bookType: typeMatch.type });
+    // Back color only applies to hardcover rows; column C is ignored for
+    // every other spine type even if it has text in it.
+    if (typeMatch.type !== BookType.Hardcover || backColorText.trim() === "") {
+      assignments.push({ coverId, bookType: typeMatch.type });
+      return;
+    }
+    const backColor = normalizeHexColor(backColorText);
+    if (backColor === null) {
+      invalidBackColors.push(`${bookName}: "${backColorText}"`);
+      assignments.push({ coverId, bookType: typeMatch.type });
+      return;
+    }
+    assignments.push({ coverId, bookType: typeMatch.type, backColor });
   });
 
   return {
@@ -256,5 +299,6 @@ export function matchCsvToCovers(
     skippedHeader,
     unmatchedBookNames,
     unrecognizedSpineTypes,
+    invalidBackColors,
   };
 }

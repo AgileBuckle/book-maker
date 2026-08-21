@@ -400,8 +400,15 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
     }
 
     const result = matchCsvToCovers(text, covers);
-    result.assignments.forEach(({ coverId, bookType }) => {
+    result.assignments.forEach(({ coverId, bookType, backColor }) => {
       setRowBookType(coverId, bookType);
+      // A CSV-supplied hardcover color is as explicit an override as
+      // picking one by hand, so route it through setRowBackColor — that
+      // also marks the row backColorManual so the auto-detect effect
+      // doesn't immediately overwrite it.
+      if (backColor !== undefined) {
+        setRowBackColor(coverId, backColor);
+      }
     });
 
     const messages: string[] = [];
@@ -417,6 +424,13 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
         `${result.unrecognizedSpineTypes.length} row${
           result.unrecognizedSpineTypes.length === 1 ? "" : "s"
         } had a spine type that wasn't recognized: ${result.unrecognizedSpineTypes.join("; ")}.`,
+      );
+    }
+    if (result.invalidBackColors.length > 0) {
+      messages.push(
+        `${result.invalidBackColors.length} hardcover row${
+          result.invalidBackColors.length === 1 ? "" : "s"
+        } had a back color that wasn't a valid hex code: ${result.invalidBackColors.join("; ")}.`,
       );
     }
     if (result.assignments.length === 0 && messages.length === 0) {
@@ -791,14 +805,16 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
       })),
     );
     const imageCount = entries.length;
-    // Include the same "Book Name,Spine Type" CSV layout the optional
-    // upload reads, populated with what this batch actually used, so the
-    // batch can be redone later by re-uploading it instead of re-picking
-    // every book's type again.
+    // Include the same "Book Name,Spine Type,Hardcover Back Color" CSV
+    // layout the optional upload reads, populated with what this batch
+    // actually used — including each hardcover row's resolved back-cover
+    // color — so the batch can be redone later by re-uploading it instead
+    // of re-picking every book's settings again.
     const csvText = buildSpineTypeCsv(
       readyRows.map((row) => ({
         bookName: row.cover.file.name,
         bookType: row.bookType,
+        backColor: row.backColor,
       })),
     );
     entries.push({
