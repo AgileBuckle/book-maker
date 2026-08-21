@@ -5,6 +5,14 @@
 - [x] Hardcover back cover guess smart?
 - [x] Export csv with pngs about what was done and reuploadable to rerun. Stores just cover name and other configuration options.
 - [x] Gracefully handle errors (e.g. when it fails give an error and why and how to fix)
+- [ ] When it fails, don't stop generation. Continue going and throw an error with the failed ones at the end.
+- [ ] Autodetect color mode and warn before it starts
+- [ ] Trimming and drop-shadowing that's currently done in Photoshop could be integrated.
+- [ ] Remove spiral option from batch mode
+- [ ] Any parameter that can be set in single mode.
+- [ ] Export hardcover color into csv.
+- [ ] Figure out how to generate spirals in the maker itself.
+- [ ] Rounded corner.
 
 # UX/UI Problems
 - [x] Left align batch button on main page.
