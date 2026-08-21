@@ -9,7 +9,12 @@ import { BookType } from "../enums.ts";
 import { MATCH_THRESHOLD, NamedFile, fileNameSimilarity } from "./fuzzyMatch";
 
 /** Alternate phrasings accepted for each spine type, matched fuzzily so
- * spacing, hyphens, and minor typos don't matter. */
+ * spacing, hyphens, and minor typos don't matter.
+ *
+ * Spiral bound is intentionally left out: batch mode doesn't offer it as a
+ * book type (see BatchApp.tsx's bookTypeLabels), so a CSV row naming it
+ * falls through to unrecognizedSpineTypes instead of silently assigning a
+ * type nothing in the batch UI can produce or display. */
 const bookTypeAliases = new Map<BookType, string[]>([
   [
     BookType.PerfectBound,
@@ -36,27 +41,13 @@ const bookTypeAliases = new Map<BookType, string[]>([
       "Staple Bound",
     ],
   ],
-  [
-    BookType.SpiralBound,
-    [
-      "Spiral Bound",
-      "Spiral-Bound",
-      "Spiralbound",
-      "Spiral",
-      "Coil Bound",
-      "Coilbound",
-    ],
-  ],
 ]);
 
-/** Canonical text written to the "Spine Type" column when exporting a CSV.
- * Kept separate from batch mode's on-screen labels (e.g. "Spiral bound
- * (partial)") so a round-tripped CSV re-uploads cleanly. */
+/** Canonical text written to the "Spine Type" column when exporting a CSV. */
 const bookTypeExportLabels = new Map<BookType, string>([
   [BookType.PerfectBound, "Perfect bound"],
   [BookType.Hardcover, "Hardcover"],
   [BookType.Saddlestitch, "Saddlestitch"],
-  [BookType.SpiralBound, "Spiral bound"],
 ]);
 
 function csvField(value: string): string {

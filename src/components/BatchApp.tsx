@@ -95,11 +95,13 @@ function describeRejectedFiles(names: string[], label: string): string {
 
 const defaultSpine = "template-spine.png";
 
+// Spiral bound is intentionally left out here: batch mode doesn't support
+// it (see the "Remove spiral option from batch mode" TODO) — it's still
+// available in single-image mode via BookDisplay.tsx.
 const bookTypeLabels = new Map<BookType, string>([
   [BookType.PerfectBound, "Perfect bound"],
   [BookType.Hardcover, "Hardcover"],
   [BookType.Saddlestitch, "Saddlestitch"],
-  [BookType.SpiralBound, "Spiral bound (partial)"],
 ]);
 
 const scalingModeLabels = new Map<ScalingMode, string>([
@@ -201,7 +203,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   );
   const [size, setSize] = useState<number>(1200);
   const [unit, setUnit] = useState<Units>(Units.Pixel);
-  const [spineWidth, setSpineWidth] = useState<number>(0.25);
 
   let sizeInUnits = size.toFixed(0);
   if (unit !== Units.Pixel)
@@ -893,16 +894,8 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
   // section reverts to normal top-down flow so it can grow downward.
   const nothingUploadedYet = !coverExists && !spineExists;
 
-  // Spiral spine width is still a single, batch-wide setting (not per-row),
-  // but the control should show up whenever it's relevant to any row — not
-  // just when it matches the default type — since a row can be switched
-  // away from the default. (Hardcover back cover color, by contrast, is
-  // now automatic and per-row — see the color swatch in each row below.)
   const anyNeedsSpine =
     defaultNeedsSpine || rows.some((row) => needsSpineForType(row.bookType));
-  const anySpiralBound =
-    bookType === BookType.SpiralBound ||
-    rows.some((row) => row.bookType === BookType.SpiralBound);
 
   const progressPercent = isProcessing
     ? Math.round((currentIndex / Math.max(readyRows.length, 1)) * 100)
@@ -952,22 +945,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
             individually in the list below.
           </p>
         </Field>
-        {anySpiralBound ? (
-          <Field className="space-y-4">
-            <Label className="block mb-2 text-sm font-medium text-white">
-              Spine Width
-            </Label>
-            <Input
-              type="number"
-              className="border text-sm w-full rounded-lg block p-2.5 bg-gray-800 border-gray-600 placeholder-gray-300 text-white focus:ring-blue-500 focus:border-blue-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              placeholder="Width"
-              onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                setSpineWidth(parseFloat(event.target.value));
-              }}
-              required
-            />
-          </Field>
-        ) : null}
         <Field>
           <Label className="block mb-2 text-sm font-medium text-white">
             Scaling
@@ -1112,7 +1089,6 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                 backColor={currentRow?.backColor ?? "#ffffff"}
                 bookType={currentRow?.bookType ?? bookType}
                 scalingMode={scalingMode}
-                spineWidth={spineWidth}
                 size={size}
                 onSettled={handleSettled}
               />
@@ -1178,10 +1154,9 @@ export default function BatchApp({ onExit }: { onExit: () => void }) {
                   </div>
                   <p className="mt-2 text-xs text-gray-400">
                     Column A: book name, column B: spine type (Perfect bound,
-                    Hardcover, Saddlestitch, or Spiral bound). Book names are
-                    matched to your uploaded covers with the same fuzzy matching
-                    used for cover/spine pairing, so exact filenames aren't
-                    required.
+                    Hardcover, or Saddlestitch). Book names are matched to your
+                    uploaded covers with the same fuzzy matching used for
+                    cover/spine pairing, so exact filenames aren't required.
                   </p>
                   {csvFileName ? (
                     <div className="mt-2 flex items-center justify-between bg-gray-800 rounded px-2 py-1 text-sm text-gray-300">

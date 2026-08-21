@@ -8,7 +8,7 @@
 - [x] When it fails, don't stop generation. Continue going and throw an error with the failed ones at the end.
 - [x] Autodetect color mode problems and warn before it starts
 - [ ] Trimming and drop-shadowing that's currently done in Photoshop could be integrated.
-- [ ] Remove spiral option from batch mode
+- [x] Remove spiral option from batch mode
 - [ ] Any parameter that can be set in single mode.
 - [ ] Export hardcover color into csv.
 - [ ] Figure out how to generate spirals in the maker itself.

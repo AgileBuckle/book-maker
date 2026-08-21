@@ -184,63 +184,10 @@ function SaddlestitchBook({ coverMap }: { coverMap: Texture }) {
   );
 }
 
-function SpiralBoundBook({
-  coverMap,
-  spineWidth,
-}: {
-  coverMap: Texture;
-  spineWidth: number;
-}) {
-  const pageMap = useLoader(TextureLoader, "page-effect.png");
-  const spineMap = useLoader(TextureLoader, "page-effect-vertical.png");
-  const spineNormalMap = useLoader(
-    TextureLoader,
-    "spiralbound-spine-normal.png",
-  );
-  const coverAspect = coverMap.image.width / coverMap.image.height;
-  const spineAspect = spineMap.image.width / spineMap.image.height;
-  return (
-    <group>
-      <mesh castShadow receiveShadow position={[0, 0, spineWidth / 2]}>
-        <planeGeometry args={[coverAspect, 1]} />
-        <meshStandardMaterial
-          map={coverMap}
-          side={2}
-          shadowSide={2}
-          normalScale={0.7}
-        />
-      </mesh>
-      <mesh
-        castShadow
-        receiveShadow
-        rotation={[0, -Math.PI / 2.0, 0]}
-        position={[-coverAspect / 2, 0, 0]}
-      >
-        <planeGeometry args={[spineWidth, 1]} />
-        <meshStandardMaterial
-          map={spineMap}
-          normalMap={spineNormalMap}
-          side={2}
-          shadowSide={2}
-          normalScale={0.35}
-        />
-      </mesh>
-      <mesh
-        castShadow
-        receiveShadow
-        rotation={[-Math.PI / 2.0, 0, 0]}
-        position={[0, 0.5, 0]}
-      >
-        <planeGeometry args={[coverAspect, spineWidth]} />
-        <meshStandardMaterial map={pageMap} side={2} shadowSide={2} />
-      </mesh>
-      <mesh castShadow position={[0, -0.25, 0]}>
-        <boxGeometry args={[coverAspect - 0.01, 0.5, spineAspect - 0.01]} />
-        <shadowMaterial />
-      </mesh>
-    </group>
-  );
-}
+// Spiral bound (SpiralBoundBook) is intentionally not implemented here:
+// batch mode doesn't offer it as a book type (see BatchApp.tsx's
+// bookTypeLabels) — it's still available in single-image mode via
+// BookDisplay.tsx.
 
 /**
  * Fires `onSettled` once `targetFrames` real animation frames have elapsed
@@ -286,7 +233,6 @@ function BatchBookDisplay({
   coverUrl,
   spineUrl,
   backColor,
-  spineWidth,
   bookType,
   scalingMode,
   size,
@@ -295,7 +241,6 @@ function BatchBookDisplay({
   coverUrl: string;
   spineUrl: string;
   backColor: string;
-  spineWidth: number;
   bookType: BookType;
   scalingMode: ScalingMode;
   size: number;
@@ -343,7 +288,6 @@ function BatchBookDisplay({
     coverUrl,
     spineUrl,
     backColor,
-    spineWidth,
     bookType,
     scalingMode,
     size,
@@ -397,9 +341,6 @@ function BatchBookDisplay({
           ) : null}
           {bookType === BookType.Saddlestitch ? (
             <SaddlestitchBook coverMap={coverMap} />
-          ) : null}
-          {bookType === BookType.SpiralBound ? (
-            <SpiralBoundBook coverMap={coverMap} spineWidth={spineWidth} />
           ) : null}
           <mesh
             castShadow
